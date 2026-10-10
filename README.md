@@ -41,18 +41,29 @@ NAMESPACE=secretskydb
 kubectl create namespace "$NAMESPACE"
 
 mpdev install \
-  --deployer=us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/deployer:0.1 \
+  --deployer=us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/deployer:0.2 \
   --parameters='{
     "name": "secretskydb",
     "namespace": "'$NAMESPACE'",
     "alloydbShareSecret": "secretskydb-alloydb-shares",
-    "reportingSecret": "REPORTING_SECRET_NAME"
+    "reportingSecret": "REPORTING_SECRET_NAME",
+    "license.key": "SSDB1...."
   }'
 ```
 
 `reportingSecret` is the usage-reporting Secret that Google Cloud Marketplace
 creates for your deployment (Marketplace → your order → credentials); it lets
 the bundled metering agent report `proxy_time` usage for billing.
+
+`license.key` is your SecretSkyDB licence token (release 0.2 and later). It is
+bound to your Google Cloud project *number* and carries an expiry; request one
+at <https://secretskydb.com/license>. The field may be left out: the deployment
+then runs a **14-day evaluation** from its first start, after which the proxy
+refuses client connections until a licence is installed (the cache and the
+shares are untouched). To install or renew a licence on a running deployment,
+replace the Secret `secretskydb-license` (key `token`) and restart the proxy
+pod; the proxy also re-reads its licence every hour. `/statusz` on the proxy's
+health port (55433) reports the licence state.
 
 ## Verify
 
@@ -73,11 +84,26 @@ documentation for the `Secret` / `Cacheable` / `Open` column model, sizing
 presets, and the encrypted-at-rest StorageClass recommendation for the cache
 volume.
 
+### Transport security (release 0.2 and later)
+
+The proxy serves plaintext PostgreSQL inside the cluster by default. To expose
+it beyond the cluster, give it a TLS certificate and require it: create a TLS
+Secret (`kubectl create secret tls secretskydb-proxy-tls --cert=… --key=…`) and
+set the Helm values `tls.enabled=true`, `tls.secretName=secretskydb-proxy-tls`,
+`tls.require=true`; clients then connect with `sslmode=require` (or
+`verify-full` with a CA-signed certificate). Client authentication is
+SCRAM-SHA-256 (`proxy.authMethod`). A `LoadBalancer` Service takes a source
+allow-list (`service.loadBalancerSourceRanges`) and a reserved address
+(`service.loadBalancerIP`). These are Helm values of the chart the deployer
+installs; the product documentation describes them in full.
+
 ## Upgrade
 
 Re-run `mpdev install` (or use the Marketplace UI) with the new deployer tag;
 releases are listed on the product page. The proxy's cache volume and your
-AlloyDB shares are preserved across upgrades.
+AlloyDB shares are preserved across upgrades. Deployments upgraded from 0.1 to
+0.2 keep working without a licence for 14 days from the first start on 0.2;
+install the licence within that window.
 
 ## Uninstall
 
