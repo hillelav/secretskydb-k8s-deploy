@@ -1,109 +1,138 @@
-# Deploying SecretSkyDB from the command line
+# Deploying SecretSkyDB on GKE
 
-SecretSkyDB is a wire-compatible PostgreSQL proxy that stores every sensitive
-value as 2-of-3 secret shares across separate AlloyDB instances — no single
-server ever holds recoverable data. This repository contains the **command-line
-deployment instructions** for the SecretSkyDB Kubernetes application on
-Google Cloud Marketplace. (The application images are distributed through
-Google Cloud Marketplace; this repo carries deployment assets only.)
+SecretSkyDB is a wire-compatible PostgreSQL proxy that stores every protected value
+as 2-of-3 secret shares across separate database instances, so no single server,
+cloud or administrator ever holds recoverable data. This repository holds the
+**deployment assets** for the SecretSkyDB Kubernetes application: the Helm chart,
+the Terraform module that provisions the share stores, and a one-command install
+script. The application images themselves are distributed through Google Cloud
+Marketplace.
 
 - Product page: Google Cloud Marketplace → *SecretSkyDB*
-- Support: support@secretskydb.com · Docs: see the product's Documentation tab
+- Install guide: [docs/INSTALL.md](docs/INSTALL.md)
+- Support: support@secretskydb.com
+- Licence: use of the Software is governed by the [End User License Agreement](https://www.secretskydb.com/eula);
+  the files in this repository are provided under the Apache License 2.0.
+
+## Three ways to install
+
+| Path | What you get | Billing |
+|---|---|---|
+| **Marketplace console** (Configure → Deploy) | the proxy in your cluster, metered usage | your GCP invoice |
+| **One command** (`scripts/install-secretskydb.sh`) | shares provisioned by Terraform **and** the proxy, in one run | metered if you pass the Marketplace reporting Secret, otherwise a licence token or a 14-day evaluation |
+| **`mpdev install`** (command-line deployer) | the same deploy as the console, scripted | your GCP invoice |
 
 ## Prerequisites
 
-- A GKE cluster (Standard or Autopilot), Kubernetes ≥ 1.27, and `kubectl`
+- A GKE cluster (Standard or Autopilot), Kubernetes ≥ 1.27, with `kubectl`
   pointed at it:
   ```sh
   gcloud container clusters get-credentials CLUSTER --region REGION
   ```
-- The Kubernetes **Application** resource definition (one-time per cluster):
-  ```sh
-  kubectl apply -f "https://raw.githubusercontent.com/GoogleCloudPlatform/marketplace-k8s-app-tools/master/crd/app-crd.yaml"
-  ```
-- Three AlloyDB (or PostgreSQL) share instances reachable from the cluster,
-  and a Kubernetes Secret holding their hosts and credentials (keys:
-  `proxy`, `cache`, `share-a`, `share-b`, `share-c`, `share-a-host`,
-  `share-b-host`, `share-c-host`). The product documentation includes a
-  Terraform module that provisions AlloyDB across three regions and writes
-  this Secret for you.
-- `mpdev`, Google's Marketplace dev tool:
-  ```sh
-  BIN=/usr/local/bin/mpdev
-  docker run --rm --entrypoint=cat gcr.io/cloud-marketplace-tools/k8s/dev /scripts/dev > /tmp/mpdev \
-    && chmod +x /tmp/mpdev && sudo mv /tmp/mpdev "$BIN"
-  ```
+- For AlloyDB shares: a VPC with Private Services Access (the script can create
+  it with `MANAGE_PSA=true`), and `terraform` and `helm` on your PATH.
+- For the Marketplace console and `mpdev` paths: service-account key creation
+  allowed in the project (the deployer creates a key for usage reporting). If your
+  organization blocks it, an Organization Policy Administrator can override
+  `iam.disableServiceAccountKeyCreation` for the project; see docs/INSTALL.md.
 
-## Install
+## One-command install
+
+Shares on AlloyDB, three regions, about 15 minutes:
 
 ```sh
+git clone https://github.com/hillelav/secretskydb-k8s-deploy.git && cd secretskydb-k8s-deploy
+PROJECT_ID=my-project \
+NETWORK=projects/my-project/global/networks/my-vpc \
+./scripts/install-secretskydb.sh
+```
+
+Evaluation with three stand-in PostgreSQL pods inside the cluster, no Terraform,
+about 3 minutes (all shares in one trust domain, so not for production):
+
+```sh
+PROJECT_ID=my-project SHARES=test ./scripts/install-secretskydb.sh
+```
+
+Useful options (environment variables):
+
+| Variable | Meaning |
+|---|---|
+| `REPORTING_SECRET` | name of the usage-reporting Secret from your Marketplace order; enables metering and licenses the deployment by that entitlement |
+| `LICENSE_KEY_FILE` | a SecretSkyDB licence token for deployments outside the Marketplace (request at https://secretskydb.com/license) |
+| `USERS_SECRET` | a Secret with `users.json` (users, roles, SCRAM verifiers); default is the single admin user `ssdb` |
+| `TLS_SECRET` | a `kubernetes.io/tls` Secret; clients must then connect with TLS |
+| `PROFILE` | `share-read` (default) or `cache-first`; see the install guide |
+| `SHARE_REGIONS` | comma-separated AlloyDB regions for the three shares |
+| `CACHE_STORAGECLASS` | encrypted-at-rest StorageClass for the proxy's cache volume |
+| `NAMESPACE`, `RELEASE`, `TAG`, `MANAGE_PSA`, `AUTO_APPROVE` | as named |
+
+The script prints the connection details when it finishes. To remove everything,
+including the AlloyDB shares and their data, run `scripts/uninstall-secretskydb.sh`
+with the same variables.
+
+## Command-line deployer (`mpdev`)
+
+The same deploy the Marketplace console performs, driven from a shell. The share
+stores and their Secret must exist first (the Terraform in `terraform/` creates
+them: three AlloyDB instances and the Secret `secretskydb-alloydb-shares` with the
+keys `proxy`, `cache`, `share-a/b/c`, `share-a/b/c-host`, `share-a/b/c-user`).
+
+```sh
+BIN=/usr/local/bin/mpdev
+docker run --rm --entrypoint=cat gcr.io/cloud-marketplace-tools/k8s/dev /scripts/dev > /tmp/mpdev \
+  && chmod +x /tmp/mpdev && sudo mv /tmp/mpdev "$BIN"
+
+kubectl apply -f "https://raw.githubusercontent.com/GoogleCloudPlatform/marketplace-k8s-app-tools/master/crd/app-crd.yaml"
 NAMESPACE=secretskydb
 kubectl create namespace "$NAMESPACE"
 
 mpdev install \
-  --deployer=us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/deployer:0.2 \
+  --deployer=us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/deployer:0.3 \
   --parameters='{
     "name": "secretskydb",
     "namespace": "'$NAMESPACE'",
     "alloydbShareSecret": "secretskydb-alloydb-shares",
-    "reportingSecret": "REPORTING_SECRET_NAME",
-    "license.key": "SSDB1...."
+    "reportingSecret": "REPORTING_SECRET_NAME"
   }'
 ```
 
 `reportingSecret` is the usage-reporting Secret that Google Cloud Marketplace
-creates for your deployment (Marketplace → your order → credentials); it lets
-the bundled metering agent report `proxy_time` usage for billing.
+creates for your order (Marketplace → your order → credentials). With it, the
+metering agent reports `proxy_time` usage for billing and the deployment is
+licensed by the Marketplace entitlement; no licence key is needed. A `license.key`
+parameter exists for deployments that hold a SecretSkyDB licence token instead.
 
-`license.key` is your SecretSkyDB licence token (release 0.2 and later). It is
-bound to your Google Cloud project *number* and carries an expiry; request one
-at <https://secretskydb.com/license>. The field may be left out: the deployment
-then runs a **14-day evaluation** from its first start, after which the proxy
-refuses client connections until a licence is installed (the cache and the
-shares are untouched). To install or renew a licence on a running deployment,
-replace the Secret `secretskydb-license` (key `token`) and restart the proxy
-pod; the proxy also re-reads its licence every hour. `/statusz` on the proxy's
-health port (55433) reports the licence state.
-
-## Verify
+## After the install
 
 ```sh
 kubectl get application/secretskydb -n "$NAMESPACE"   # status: Healthy
 kubectl get pods -n "$NAMESPACE"                       # proxy StatefulSet Ready
 ```
 
-Connect exactly as to PostgreSQL (no driver changes):
+Connect exactly as to PostgreSQL, no driver changes:
 
 ```sh
 kubectl port-forward -n "$NAMESPACE" svc/secretskydb 55432:55432 &
-psql "host=127.0.0.1 port=55432 user=YOUR_USER dbname=ssdb"
+psql "host=127.0.0.1 port=55432 user=ssdb dbname=ssdb"
 ```
 
-Column protection tiers are declared in the table schema; see the product
-documentation for the `Secret` / `Cacheable` / `Open` column model, sizing
-presets, and the encrypted-at-rest StorageClass recommendation for the cache
-volume.
+Licence state and share status:
 
-### Transport security (release 0.2 and later)
+```sh
+kubectl port-forward -n "$NAMESPACE" pod/secretskydb-0 55433:55433 &
+curl -s http://127.0.0.1:55433/statusz | python3 -m json.tool
+```
 
-The proxy serves plaintext PostgreSQL inside the cluster by default. To expose
-it beyond the cluster, give it a TLS certificate and require it: create a TLS
-Secret (`kubectl create secret tls secretskydb-proxy-tls --cert=… --key=…`) and
-set the Helm values `tls.enabled=true`, `tls.secretName=secretskydb-proxy-tls`,
-`tls.require=true`; clients then connect with `sslmode=require` (or
-`verify-full` with a CA-signed certificate). Client authentication is
-SCRAM-SHA-256 (`proxy.authMethod`). A `LoadBalancer` Service takes a source
-allow-list (`service.loadBalancerSourceRanges`) and a reserved address
-(`service.loadBalancerIP`). These are Helm values of the chart the deployer
-installs; the product documentation describes them in full.
+Column protection tiers are declared in the table schema; see docs/INSTALL.md for
+the `Secret` / `Cacheable` / `Open` column model, users and roles, TLS, and the
+encrypted-at-rest StorageClass recommendation for the cache volume.
 
 ## Upgrade
 
-Re-run `mpdev install` (or use the Marketplace UI) with the new deployer tag;
-releases are listed on the product page. The proxy's cache volume and your
-AlloyDB shares are preserved across upgrades. Deployments upgraded from 0.1 to
-0.2 keep working without a licence for 14 days from the first start on 0.2;
-install the licence within that window.
+Re-run the install script or `mpdev install` with the new tag, or use the
+Marketplace console; releases are listed on the product page. The proxy's cache
+volume and your shares are preserved across upgrades.
 
 ## Uninstall
 
@@ -111,17 +140,8 @@ install the licence within that window.
 kubectl delete application/secretskydb -n "$NAMESPACE"
 ```
 
-This garbage-collects the application's resources (StatefulSet, Services,
-ConfigMaps, Jobs). The AlloyDB share instances and their data — the durable,
-secret-shared record — are yours and are never touched by uninstall. Delete
-the namespace and the PVC too if you do not intend to reinstall:
-
-```sh
-kubectl delete namespace "$NAMESPACE"
-```
-
-## License
-
-Use of SecretSkyDB is governed by the End User License Agreement presented on
-the Google Cloud Marketplace product page. The deployment instructions in
-this repository are provided under the Apache License 2.0.
+This removes the application's resources (StatefulSet, Services, ConfigMaps,
+Jobs). The share instances and their data, the durable secret-shared record, are
+yours and are never touched by uninstall. `scripts/uninstall-secretskydb.sh`
+additionally destroys the AlloyDB shares created by the Terraform module, after
+an explicit confirmation.

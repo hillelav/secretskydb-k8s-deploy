@@ -1,0 +1,73 @@
+{{- if .Values.bootstrap.enabled }}
+# One-shot Job: install the pure-SQL inner-product UDF + RAG schema on each AlloyDB
+# share. AlloyDB is managed Postgres and cannot load the C extension, so the proxy
+# uses the pure-SQL ssdb_ff_inner_product() instead (rewritten transparently).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-bootstrap-sql
+  namespace: {{ .Release.Namespace }}
+data:
+  ssdbpgvector_sql.sql: |
+{{ .Files.Get "files/ssdbpgvector_sql.sql" | indent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secretskydb.labels" . | nindent 4 }}
+  # NOTE: no Helm lifecycle hooks — the Marketplace deployer does not support
+  # post-install/post-upgrade hooks (only `test`). This is a plain Job the deployer
+  # applies with the rest of the release; it waits for each share to accept
+  # connections before running (see the pg_isready loop below).
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: {{ .Values.bootstrap.image }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              {{- range $i, $s := .Values.shares }}
+              echo ">> {{ $s.name }} ({{ $s.region }}): ensure db '{{ $s.dbname }}' + UDF/schema"
+              export PGPASSWORD="$SSDB_SHARE_{{ $i }}_PASSWORD"
+              export PGSSLMODE="{{ $.Values.sharesSslmode | default $s.sslmode | default "require" }}"
+              H="$SSDB_SHARE_{{ $i }}_HOST"; U="$SSDB_SHARE_{{ $i }}_USER"
+              # Wait for the share to accept connections (no Helm hook ordering: this
+              # Job may start before the share Pod/instance is ready).
+              for n in $(seq 1 60); do
+                pg_isready -h "$H" -p {{ $s.port }} -U "$U" -d postgres && break
+                echo "  waiting for {{ $s.name }} at $H:{{ $s.port }} ($n/60)"; sleep 5
+              done
+              # Create the target database if it does not exist (connect to 'postgres').
+              if ! psql -h "$H" -p {{ $s.port }} -U "$U" -d postgres -tAc \
+                     "SELECT 1 FROM pg_database WHERE datname='{{ $s.dbname }}'" | grep -q 1; then
+                psql -h "$H" -p {{ $s.port }} -U "$U" -d postgres \
+                     -v ON_ERROR_STOP=1 -c 'CREATE DATABASE "{{ $s.dbname }}"'
+              fi
+              # Install the pure-SQL inner-product UDF + RAG schema.
+              psql -h "$H" -p {{ $s.port }} -U "$U" -d "{{ $s.dbname }}" \
+                   -v ON_ERROR_STOP=1 -f /sql/ssdbpgvector_sql.sql
+              {{- end }}
+              echo "bootstrap complete"
+          env:
+            {{- range $i, $s := .Values.shares }}
+            - name: SSDB_SHARE_{{ $i }}_HOST
+              valueFrom: { secretKeyRef: { name: {{ $.Values.alloydbShareSecret }}, key: {{ $s.name }}-host } }
+            - name: SSDB_SHARE_{{ $i }}_USER
+              valueFrom: { secretKeyRef: { name: {{ $.Values.alloydbShareSecret }}, key: {{ $s.name }}-user } }
+            - name: SSDB_SHARE_{{ $i }}_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $.Values.alloydbShareSecret }}, key: {{ $s.name }} } }
+            {{- end }}
+          volumeMounts:
+            - { name: bootstrap-sql, mountPath: /sql, readOnly: true }
+      volumes:
+        - name: bootstrap-sql
+          configMap: { name: {{ .Release.Name }}-bootstrap-sql }
+{{- end }}

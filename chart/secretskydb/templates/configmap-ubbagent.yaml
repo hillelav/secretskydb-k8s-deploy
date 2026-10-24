@@ -1,0 +1,47 @@
+{{- if .Values.ubbagent.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-ubbagent-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secretskydb.labels" . | nindent 4 }}
+data:
+  # Usage-Based Billing agent config. Launch metric = proxy-hours: a heartbeat
+  # source emits 1 unit/hour while the proxy pod runs; the listing prices the unit
+  # (SecretSkyDB fee = 30% of the customer's Google Cloud consumption).
+  # ubbagent expands $VAR from the container env. The StatefulSet injects
+  # AGENT_ENCODED_KEY and AGENT_CONSUMER_ID from the Marketplace REPORTING_SECRET.
+  config.yaml: |
+    identities:
+      - name: gcp
+        gcp:
+          encodedServiceAccountKey: "$AGENT_ENCODED_KEY"
+    metrics:
+      - name: {{ .Values.ubbagent.metric }}
+        type: int
+        endpoints:
+          - name: on_disk
+          - name: servicecontrol
+        aggregation:
+          bufferSeconds: 60
+    sources:
+      - name: {{ .Values.ubbagent.metric }}_heartbeat
+        heartbeat:
+          metric: {{ .Values.ubbagent.metric }}
+          intervalSeconds: 3600        # 1 unit per hour = proxy-hours
+          value:
+            int64Value: 1
+    endpoints:
+      # Local durable buffer so reports survive transient Service Control outages.
+      - name: on_disk
+        disk:
+          reportDir: /var/lib/ubbagent/reports
+          expireSeconds: 3600
+      - name: servicecontrol
+        servicecontrol:
+          identity: gcp
+          serviceName: {{ .Values.ubbagent.serviceName }}
+          consumerId: "$AGENT_CONSUMER_ID"
+
+{{- end }}

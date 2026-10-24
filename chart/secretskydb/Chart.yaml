@@ -1,0 +1,11 @@
+apiVersion: v2
+name: secretskydb
+description: >-
+  SecretSkyDB — post-quantum secret-sharing database proxy for PostgreSQL/AlloyDB.
+  GKE Enterprise Marketplace app: the proxy/reassembly engine runs as a pod;
+  three sub-threshold shares live on AlloyDB across three Google Cloud regions.
+type: application
+version: 0.3.0
+appVersion: "0.3.0"
+icon: https://secretskydb.com/icon.png
+keywords: [postgresql, alloydb, security, post-quantum, secret-sharing, mpc, rag, vector-search]

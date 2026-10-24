@@ -1,0 +1,185 @@
+# Values for the SecretSkyDB Marketplace app.
+# Image repo/tag and the Marketplace-managed fields (serviceAccount, reportingSecret)
+# are populated from schema.yaml (x-google-marketplace) at deploy time.
+#
+# Share HOSTS and all PASSWORDS are NOT set here — they are injected at runtime as
+# env vars from the Kubernetes Secret named in `alloydbShareSecret`, which
+# `terraform/` provisions alongside the AlloyDB instances. The proxy expands the
+# ${SSDB_*} placeholders in proxy.json from that env (see ssdb_pg_proxy.load_config).
+
+proxy:
+  # Where protected (Secret) values live while the deployment runs:
+  #   share-read  (default) the cache keeps only Open/Cacheable columns; every read of a Secret
+  #               column is answered by the share servers — plaintext of protected values never
+  #               rests on the cache volume.
+  #   cache-first the cache also holds Secret values (encrypted-at-rest volume recommended) and
+  #               answers every read; the shares are the asynchronous mirror. Needed for
+  #               read-modify-write statements on Secret columns (UPDATE t SET x = x + 1) and for
+  #               OLTP throughput at plaintext parity (the TPC-C profile of the performance paper).
+  profile: share-read
+  image:
+    repo: us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/proxy
+    tag: "0.3.0"
+  port: 55432
+  authMethod: scram-sha-256  # or md5 for drivers that cannot do SCRAM
+  mirrorWorkers: 2           # parallel apply workers for the share mirror (0 = serial); each holds a connection per share
+  servingProcesses: 2        # proxy serving processes (one port, balanced accept); raise with the CPU limit
+  serviceAccount: ""        # set by Marketplace (SERVICE_ACCOUNT)
+  resources:
+    requests: { cpu: "500m", memory: "512Mi" }
+    limits:   { cpu: "2",    memory: "2Gi" }
+
+# In-pod plaintext cache (performance + cacheable-column filtering).
+#
+# DURABILITY: the proxy ACKs a client write as soon as it commits to the cache and
+# fans out to the GCP shares asynchronously (advancing the wal2json slot only after
+# the shares are durable). The cache's WAL + replication slot are therefore the
+# durability record for acknowledged-but-not-yet-propagated writes, so the cache
+# MUST be PERSISTENT — an ephemeral/RAM cache would lose acked data on a crash.
+#
+# SECURITY: because it is persistent, plaintext lives AT REST on the customer's own
+# ON-PREM storage — inside the customer's trust boundary, never in any cloud. This
+# is the "plaintext stays within your premises" model (not "in memory only"). Use
+# an encrypted-at-rest StorageClass on-prem.
+cache:
+  enabled: true
+  # Postgres 16 + the wal2json output plugin (built from cache/Dockerfile).
+  # wal_level=logical is set by the StatefulSet via server args, not the image.
+  image: us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/cache:0.3.0
+  port: 5432
+  user: ssdb_cache
+  db: ssdb
+  # Persistent on-prem volume for the cache (PGDATA + WAL + replication slot).
+  # enabled MUST stay true in production (durability of acked writes). It is set
+  # false only for `mpdev verify` (ephemeral emptyDir) so the smoke test does not
+  # depend on a default StorageClass in the throwaway test cluster.
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClass: ""         # "" = cluster default; set to your on-prem CSI class
+    accessMode: ReadWriteOnce
+  resources:
+    requests: { cpu: "250m", memory: "512Mi" }
+    limits:   { cpu: "1",    memory: "1200Mi" }
+  # wal2json logical replication slot the proxy creates on the cache.
+  replicationSlot: ssdb_slot
+  # PostgreSQL settings for the cache. The defaults suit the 1 vCPU / 1.2 GiB limits above; on a
+  # larger cache raise sharedBuffers (~25 % of memory) and maxWalSize (the C3D benchmark used 4GB/64GB).
+  tuning:
+    sharedBuffers: 256MB
+    maxWalSize: 4GB
+    checkpointTimeout: 30min
+    walCompression: "on"     # lz4 where the image's PostgreSQL is built with it
+
+ubbagent:
+  enabled: true            # disabled in apptest (mpdev verify) — no reporting secret there
+  image: us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/ubbagent:0.3.0
+  # Service Control service name. The deployer path now serves the LEGACY
+  # K8s listing (case 72776243, 2026-08-31: private offers are supported only
+  # on legacy K8s products, not Terraform-K8s) — so this is the legacy
+  # listing's service. The Terraform listing (secretskydb.endpoints....)
+  # does not consume the deployer/chart values; it has its own module.
+  serviceName: secretskydb-private-legacy.endpoints.secretskydb-public.cloud.goog
+  # Metric reported to Service Control. Launch unit: proxy-hours.
+  metric: proxy_time
+  # Keys inside the Marketplace REPORTING_SECRET (type REPORTING_SECRET). Defaults
+  # follow the marketplace-k8s-app-tools convention; VERIFY against the secret the
+  # deployer actually produces and adjust here if they differ (no template edit).
+  reportingSecretKeys:
+    consumerId: consumer-id
+    reportingKey: reporting-key
+
+# Marketplace reporting secret (consumer id + service-account key) — type REPORTING_SECRET.
+reportingSecret: ""
+
+# Shamir secret-sharing parameters (k-of-n). The total-shares key is named
+# `shares`, NOT `n`: a bare `n` mapping key is coerced to boolean false by YAML 1.1
+# parsers (Helm's, and the Marketplace deployer's config round-trip), which made
+# .Values.sss.n render empty and produced invalid proxy.json ("n":  ). The proxy's
+# JSON still uses "n" — only the chart values key is renamed.
+sss:
+  k: 2
+  shares: 3
+
+# Proxy-facing database identity (the wire-protocol DB the customer app connects to).
+proxyDb: ssdb
+proxyUser: ssdb
+
+# Shares are managed PostgreSQL (AlloyDB): no ssdbpgvector C extension, no 2PC
+# PREPARE. The proxy auto-detects this, but declaring it skips the probe.
+managed: true
+
+# Share stores. LAUNCH = three AlloyDB regions on Google Cloud. The list is generic
+# (host + creds come from the Secret by share name) so a multi-cloud variant is just
+# a values override — no chart change. Per-share `sslmode` defaults to `require`
+# (managed TLS); apptest overrides it to `disable` for in-cluster stand-ins.
+# Global override for every share's sslmode. Empty = use each share's own sslmode
+# (default "require" for managed AlloyDB TLS). `mpdev verify` sets this to "disable"
+# because the in-cluster stand-in shares are plain Postgres without TLS.
+sharesSslmode: ""
+alloydbShareSecret: secretskydb-alloydb-shares   # keys: proxy, cache, share-a/b/c, share-a-host/…
+shares:
+  - { name: share-a, region: europe-west1,         port: 5432, user: postgres, dbname: ssdb, sslmode: require }
+  - { name: share-b, region: australia-southeast1, port: 5432, user: postgres, dbname: ssdb, sslmode: require }
+  - { name: share-c, region: asia-southeast1,      port: 5432, user: postgres, dbname: ssdb, sslmode: require }
+
+# Bootstrap: install the pure-SQL inner-product UDF + RAG schema on each AlloyDB share.
+bootstrap:
+  enabled: true
+  image: postgres:16-alpine
+
+service:
+  type: ClusterIP    # PSC / LoadBalancer can be layered for cross-cluster access
+  # With type LoadBalancer: the only source CIDRs admitted (never expose the proxy to 0.0.0.0/0).
+  # e.g. {networking.gke.io/load-balancer-type: Internal} for a VPC-internal load balancer on GKE
+  annotations: {}
+  loadBalancerSourceRanges: []
+  loadBalancerIP: ""        # a reserved regional static address, when the endpoint must be stable
+
+# Access control (0.3). Additional proxy users with roles, as a list of records the proxy reads from a
+# Secret (SSDB_USERS_FILE). Make a record with `tools/ssdb_user.py add users.json <name> --role …` and
+# paste it here, or point users.existingSecret at a Secret you manage (key users.json). The legacy
+# single user (proxyUser + the `proxy` key of alloydbShareSecret) stays and is an admin.
+#   role:        reader | writer | admin           (each includes the previous)
+#   reconstruct: all | aggregate | none            (may this user read Secret values; "aggregate" =
+#                                                   SUM/COUNT/AVG on the shares only, never a row)
+users:
+  existingSecret: ""     # a Secret with key users.json; overrides the list below
+  list: []
+  # - { name: analyst, role: reader, reconstruct: aggregate, scram: "SCRAM-SHA-256$4096:…$…:…" }
+
+# Statement audit: one JSON line per statement on the proxy's stdout (-> Cloud Logging): user, role,
+# client, tables, Secret columns reconstructed, rows, duration, result.
+#   mode: off | statements | full   ("full" also disables the C relay's shape forwarding so no statement
+#                                    can bypass the record; costs throughput on admin sessions)
+#   sql:  hash | text               (hash = SHA-256 prefix of the statement; text = the statement itself)
+audit:
+  mode: statements
+  sql: hash
+
+# Licence token issued by SecretSkyDB (tools/ssdb_license.py issue ...), for installs OUTSIDE the
+# Marketplace. Empty = 14-day evaluation, then the proxy refuses connections. Rendered into the
+# Secret <release>-license, read as SSDB_LICENSE. Marketplace deployments (reportingSecret set by
+# the deployer) need no token: the entitlement and hourly metering are the licence (0.3).
+license:
+  key: ""
+
+# Inbound TLS on the proxy (client -> proxy). The Secret is a kubernetes.io/tls Secret
+# (tls.crt / tls.key) — from cert-manager, or `kubectl create secret tls`. With require: true
+# a client that does not negotiate TLS is refused before any password is exchanged.
+tls:
+  enabled: false
+  secretName: secretskydb-proxy-tls
+  require: true
+
+# TEST ONLY (mpdev verify): stand up three in-cluster Postgres pods as stand-in
+# shares and synthesize the shares Secret, so verify can install → query → uninstall
+# without real AlloyDB. Never enabled in a production install (the apptest schema
+# flips it on). See templates/test/standin-shares.yaml.
+testShares:
+  enabled: false
+  image: postgres:16-alpine
+  # Test passwords used only inside the ephemeral verify cluster.
+  proxyPassword: testproxy
+  cachePassword: testcache
+  sharePassword: testshare

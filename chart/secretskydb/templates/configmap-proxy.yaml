@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-proxy-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secretskydb.labels" . | nindent 4 }}
+data:
+  # Consumed by ssdb_pg_proxy as /config/proxy.json. ${VAR} placeholders are
+  # resolved by the proxy from env at load time (ssdb_pg_proxy.load_config):
+  #   - passwords + share hosts come from the AlloyDB Secret (terraform-provisioned)
+  #     via the env vars the StatefulSet injects (SSDB_*_PASSWORD, SSDB_SHARE_i_HOST).
+  proxy.json: |
+    {
+      "dms": "SQL",
+      "name": "secretskydb",
+      "managed": {{ .Values.managed }},
+      "container": "True",
+      "proxy": {
+        "bind_host": "0.0.0.0",
+        "bind_port": {{ .Values.proxy.port }},
+        "port": {{ .Values.proxy.port }},
+        "user": "{{ .Values.proxyUser }}",
+        "password": "${SSDB_PROXY_PASSWORD}",
+        "dbname": "{{ .Values.proxyDb }}"
+      },
+      {{- if .Values.cache.enabled }}
+      "cache": {
+        "host": "127.0.0.1",
+        "port": {{ .Values.cache.port }},
+        "user": "{{ .Values.cache.user }}",
+        "password": "${SSDB_CACHE_PASSWORD}",
+        "dbname": "{{ .Values.cache.db }}"
+      },
+      "replication": { "slot": "{{ .Values.cache.replicationSlot }}" },
+      "scrub_secrets_from_cache": {{ if eq (.Values.proxy.profile | default "share-read") "cache-first" }}false{{ else }}true{{ end }},
+      {{- end }}
+      "shares": [
+        {{- range $i, $s := .Values.shares }}
+        {{- if $i }},{{ end }}
+        {
+          "name": "{{ $s.name }}",
+          "region": "{{ $s.region }}",
+          "host": "${SSDB_SHARE_{{ add $i 1 }}_HOST}",
+          "port": {{ $s.port }},
+          "user": "${SSDB_SHARE_{{ add $i 1 }}_USER}",
+          "password": "${SSDB_SHARE_{{ add $i 1 }}_PASSWORD}",
+          "dbname": "{{ $s.dbname }}",
+          "sslmode": "{{ $.Values.sharesSslmode | default $s.sslmode | default "require" }}"
+        }
+        {{- end }}
+      ],
+      "sss": { "mode": "math", "k": {{ .Values.sss.k }}, "n": {{ .Values.sss.shares }} }
+    }

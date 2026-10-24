@@ -1,0 +1,51 @@
+{{- if .Values.tester }}
+# Smoke test run by `mpdev verify`: connect through the proxy and run a trivial
+# query, proving the wire-protocol path + share reconstruction work end-to-end.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}-tester
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secretskydb.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+spec:
+  restartPolicy: Never
+  containers:
+    - name: tester
+      image: {{ .Values.tester.image | default "postgres:16-alpine" }}
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -e
+          PSQL="psql -h {{ .Release.Name }} -p {{ .Values.proxy.port }} -U {{ .Values.proxyUser }} -d {{ .Values.proxyDb }}"
+          export PGPASSWORD="$SSDB_PROXY_PASSWORD"
+          # 1) wait for the proxy to accept connections
+          ready=""
+          for i in $(seq 1 60); do
+            if $PSQL -tAc 'SELECT 1' 2>/dev/null | grep -q 1; then ready=1; break; fi
+            sleep 5
+          done
+          [ -n "$ready" ] || { echo "FAIL: proxy not reachable"; exit 1; }
+          echo "proxy reachable; exercising split/reconstruct round-trip"
+          # 2) real round-trip: create, insert, read back through the proxy
+          #    (proxy splits to shares, reconstructs on read)
+          $PSQL -v ON_ERROR_STOP=1 -c \
+            'CREATE TABLE IF NOT EXISTS ssdb_smoke (id int PRIMARY KEY, note text)'
+          $PSQL -v ON_ERROR_STOP=1 -c \
+            "INSERT INTO ssdb_smoke (id, note) VALUES (1, 'hello-ssdb') ON CONFLICT (id) DO UPDATE SET note = EXCLUDED.note"
+          got=""
+          for i in $(seq 1 12); do
+            got=$($PSQL -tAc "SELECT note FROM ssdb_smoke WHERE id = 1" 2>/dev/null | tr -d '[:space:]')
+            [ "$got" = "hello-ssdb" ] && break
+            sleep 5
+          done
+          if [ "$got" = "hello-ssdb" ]; then
+            echo "PASS: round-trip through proxy returned '$got'"; exit 0
+          fi
+          echo "FAIL: round-trip mismatch (got '$got')"; exit 1
+      env:
+        - name: SSDB_PROXY_PASSWORD
+          valueFrom: { secretKeyRef: { name: {{ .Values.alloydbShareSecret }}, key: proxy } }
+{{- end }}

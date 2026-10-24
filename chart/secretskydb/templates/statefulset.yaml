@@ -1,0 +1,232 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secretskydb.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ .Release.Name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "secretskydb.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "secretskydb.serviceAccountName" . }}
+      containers:
+        # ── SecretSkyDB proxy / reassembly engine ───────────────────────────
+        - name: proxy
+          image: "{{ .Values.proxy.image.repo }}:{{ .Values.proxy.image.tag }}"
+          imagePullPolicy: {{ .Values.imagePullPolicy | default "Always" }}   # a re-pinned tag (CVE rebuild) takes effect on restart
+          args: ["/config/proxy.json"]
+          ports:
+            - name: pg
+              containerPort: {{ .Values.proxy.port }}
+          env:
+            # Client-facing proxy password (customer app auth); SCRAM-SHA-256 by default.
+            - name: SSDB_PROXY_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.alloydbShareSecret }}, key: proxy } }
+            - name: SSDB_AUTH_METHOD
+              value: "{{ .Values.proxy.authMethod | default "scram-sha-256" }}"
+            {{- if or .Values.users.existingSecret .Values.users.list }}
+            # Additional users with roles (0.3): the users.json of the Secret, see values.users
+            - name: SSDB_USERS_FILE
+              value: /users/users.json
+            {{- end }}
+            # Statement audit (0.3), see values.audit
+            - name: SSDB_AUDIT
+              value: "{{ .Values.audit.mode | default "statements" }}"
+            - name: SSDB_AUDIT_SQL
+              value: "{{ .Values.audit.sql | default "hash" }}"
+            # Mirror apply workers (parallel share writes) and serving processes
+            - name: SSDB_MIRROR_WORKERS
+              value: "{{ .Values.proxy.mirrorWorkers }}"
+            - name: SSDB_WORKERS
+              value: "{{ .Values.proxy.servingProcesses }}"
+            # Licence token (empty = evaluation); see templates/secret-license.yaml
+            - name: SSDB_LICENSE
+              valueFrom: { secretKeyRef: { name: {{ .Release.Name }}-license, key: token, optional: true } }
+            {{- if .Values.reportingSecret }}
+            # Marketplace deployment (0.3): the entitlement + hourly metering is the licence,
+            # so the proxy serves without a token. Only the Marketplace deployer sets
+            # reportingSecret; a plain helm/on-prem install keeps the token / evaluation policy.
+            - name: SSDB_LICENSE_MARKETPLACE
+              value: "1"
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            # Inbound TLS: the certificate Secret (kubernetes.io/tls) is mounted at /tls; with
+            # tls.require the proxy refuses clients that do not negotiate TLS (pg_hba "hostssl").
+            - name: SSDB_SSL_CERT
+              value: /tls/tls.crt
+            - name: SSDB_SSL_KEY
+              value: /tls/tls.key
+            - name: SSDB_SSL_REQUIRE
+              value: "{{ ternary "1" "0" .Values.tls.require }}"
+            {{- end }}
+            {{- if .Values.cache.enabled }}
+            # In-pod cache password (must match the cache container below).
+            - name: SSDB_CACHE_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.alloydbShareSecret }}, key: cache } }
+            {{- end }}
+            # Per-share host + password, injected by index from the shares Secret.
+            # proxy.json references ${SSDB_SHARE_i_HOST} / ${SSDB_SHARE_i_PASSWORD}.
+            # NUMBERING IS 1-BASED (SSDB_SHARE_1_* = first share): the proxy's env
+            # override (_apply_env_overrides) counts from 1. With 0-based names the
+            # proxy shifted every share by one and wrote to [b, c, c], never to
+            # share-a, deadlocking on share-c (17 Sep 2026 GKE test).
+            {{- range $i, $s := .Values.shares }}
+            - name: SSDB_SHARE_{{ add $i 1 }}_HOST
+              valueFrom: { secretKeyRef: { name: {{ $.Values.alloydbShareSecret }}, key: {{ $s.name }}-host } }
+            - name: SSDB_SHARE_{{ add $i 1 }}_USER
+              valueFrom: { secretKeyRef: { name: {{ $.Values.alloydbShareSecret }}, key: {{ $s.name }}-user } }
+            - name: SSDB_SHARE_{{ add $i 1 }}_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $.Values.alloydbShareSecret }}, key: {{ $s.name }} } }
+            {{- end }}
+          volumeMounts:
+            - { name: proxy-config, mountPath: /config, readOnly: true }
+            {{- if .Values.tls.enabled }}
+            - { name: proxy-tls, mountPath: /tls, readOnly: true }
+            {{- end }}
+            {{- if or .Values.users.existingSecret .Values.users.list }}
+            - { name: proxy-users, mountPath: /users, readOnly: true }
+            {{- end }}
+          resources:
+            {{- toYaml .Values.proxy.resources | nindent 12 }}
+          readinessProbe:
+            tcpSocket: { port: pg }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+        {{- if .Values.cache.enabled }}
+        # ── In-pod plaintext cache (PERSISTENT, on-prem) ────────────────────
+        # Postgres with wal2json + wal_level=logical. PGDATA (incl. WAL and the
+        # replication slot) is on a PERSISTENT volume (volumeClaimTemplates
+        # below): the proxy acks writes from the cache and fans out to shares
+        # asynchronously, so the cache is the durability record for acked-but-
+        # unpropagated writes and MUST survive a crash. Plaintext lives at rest
+        # on the customer's on-prem storage — use an encrypted-at-rest class.
+        - name: cache
+          image: "{{ .Values.cache.image }}"
+          imagePullPolicy: {{ .Values.imagePullPolicy | default "Always" }}
+          # wal_level etc. are SERVER params — pass them as postgres server args, NOT
+          # via PGOPTIONS. PGOPTIONS is a libpq CLIENT variable: it injects
+          # "-c wal_level=logical" into every connection made from this container,
+          # including the entrypoint's own initdb step that creates POSTGRES_DB —
+          # which then fails ("wal_level cannot be changed without restarting"),
+          # leaving the database uncreated while PGDATA is already initialized.
+          args:
+            - postgres
+            - -c
+            - wal_level=logical
+            # PostgreSQL 16.15+ (CVE-2026-6471) loads a logical-decoding output
+            # plugin only if it is listed here; the cache image also sets it in
+            # its initdb template, this covers clusters initialised earlier.
+            - -c
+            - output_plugin_libraries=wal2json
+            - -c
+            - max_replication_slots=4
+            - -c
+            - max_wal_senders=4
+            # Checkpoint/WAL tuning (C3D findings, 5 Oct 2026): the cache writes ~3x the WAL of a plain
+            # instance (identity columns + logical decoding); with the 1 GB default max_wal_size it
+            # checkpointed every few seconds under OLTP load and ran at a quarter of its throughput.
+            - -c
+            - max_wal_size={{ .Values.cache.tuning.maxWalSize }}
+            - -c
+            - checkpoint_timeout={{ .Values.cache.tuning.checkpointTimeout }}
+            - -c
+            - wal_compression={{ .Values.cache.tuning.walCompression }}
+            - -c
+            - shared_buffers={{ .Values.cache.tuning.sharedBuffers }}
+          ports:
+            - name: cache-pg
+              containerPort: {{ .Values.cache.port }}
+          env:
+            - name: POSTGRES_USER
+              value: "{{ .Values.cache.user }}"
+            - name: POSTGRES_DB
+              value: "{{ .Values.cache.db }}"
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.alloydbShareSecret }}, key: cache } }
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - { name: cache-data, mountPath: /var/lib/postgresql/data }
+          resources:
+            {{- toYaml .Values.cache.resources | nindent 12 }}
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "{{ .Values.cache.user }}", "-d", "{{ .Values.cache.db }}"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+        {{- end }}
+        {{- if .Values.ubbagent.enabled }}
+        # ── Usage-Based Billing sidecar (meters proxy-hours → Service Control) ─
+        - name: ubbagent
+          image: "{{ .Values.ubbagent.image }}"
+          env:
+            - name: AGENT_CONFIG_FILE
+              value: /etc/ubbagent/config.yaml
+            - name: AGENT_LOCAL_PORT
+              value: "4567"
+            - name: AGENT_REPORT_DIR
+              value: /var/lib/ubbagent
+            # Consumer id + reporting SA key from the Marketplace REPORTING_SECRET.
+            {{- if .Values.reportingSecret }}
+            - name: AGENT_CONSUMER_ID
+              valueFrom: { secretKeyRef: { name: {{ .Values.reportingSecret }}, key: {{ .Values.ubbagent.reportingSecretKeys.consumerId }} } }
+            - name: AGENT_ENCODED_KEY
+              valueFrom: { secretKeyRef: { name: {{ .Values.reportingSecret }}, key: {{ .Values.ubbagent.reportingSecretKeys.reportingKey }} } }
+            {{- end }}
+          volumeMounts:
+            - { name: ubbagent-config, mountPath: /etc/ubbagent, readOnly: true }
+            {{- if .Values.reportingSecret }}
+            - { name: reporting-secret, mountPath: /var/run/secrets/ubbagent, readOnly: true }
+            {{- end }}
+        {{- end }}
+      volumes:
+        {{- if .Values.tls.enabled }}
+        - name: proxy-tls
+          secret:
+            secretName: {{ .Values.tls.secretName }}
+        {{- end }}
+        {{- if or .Values.users.existingSecret .Values.users.list }}
+        - name: proxy-users
+          secret:
+            secretName: {{ .Values.users.existingSecret | default (printf "%s-users" .Release.Name) }}
+        {{- end }}
+        - name: proxy-config
+          configMap: { name: {{ .Release.Name }}-proxy-config }
+        {{- if .Values.ubbagent.enabled }}
+        - name: ubbagent-config
+          configMap: { name: {{ .Release.Name }}-ubbagent-config }
+        {{- end }}
+        {{- if .Values.reportingSecret }}
+        - name: reporting-secret
+          secret: { secretName: {{ .Values.reportingSecret }} }
+        {{- end }}
+        {{- if and .Values.cache.enabled (not .Values.cache.persistence.enabled) }}
+        # TEST ONLY: ephemeral cache so `mpdev verify` doesn't need a StorageClass.
+        # NEVER used in production — persistence.enabled=true gives a durable PVC.
+        - name: cache-data
+          emptyDir: {}
+        {{- end }}
+  {{- if and .Values.cache.enabled .Values.cache.persistence.enabled }}
+  # PERSISTENT cache volume — durability record for acked writes. StatefulSet
+  # re-attaches the same PVC across pod/node restarts so the cache WAL + wal2json
+  # slot survive a crash and share fan-out resumes with no acked-data loss.
+  volumeClaimTemplates:
+    - metadata:
+        name: cache-data
+      spec:
+        accessModes: [{{ .Values.cache.persistence.accessMode }}]
+        {{- if .Values.cache.persistence.storageClass }}
+        storageClassName: {{ .Values.cache.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.cache.persistence.size }}
+  {{- end }}
