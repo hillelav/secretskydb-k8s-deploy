@@ -18,7 +18,7 @@ Marketplace.
 
 | Path | What you get | Billing |
 |---|---|---|
-| **Marketplace console** (Configure → Deploy) | the proxy in your cluster, metered usage | your GCP invoice |
+| **Marketplace console** (Configure → Deploy) | the proxy in your cluster, metered usage; `scripts/prepare-shares.sh` creates the share stores first | your GCP invoice |
 | **One command** (`scripts/install-secretskydb.sh`) | shares provisioned by Terraform **and** the proxy, in one run | metered if you pass the Marketplace reporting Secret, otherwise a licence token or a 14-day evaluation |
 | **`mpdev install`** (command-line deployer) | the same deploy as the console, scripted | your GCP invoice |
 
@@ -35,6 +35,21 @@ Marketplace.
   allowed in the project (the deployer creates a key for usage reporting). If your
   organization blocks it, an Organization Policy Administrator can override
   `iam.disableServiceAccountKeyCreation` for the project; see docs/INSTALL.md.
+
+## Prepare the shares, then deploy from the Marketplace
+
+The Deploy button cannot create databases. This creates the three AlloyDB share
+instances and the shares Secret, then tells you what to enter in the deploy form:
+
+```sh
+git clone https://github.com/hillelav/secretskydb-k8s-deploy.git && cd secretskydb-k8s-deploy
+PROJECT_ID=my-project \
+NETWORK=projects/my-project/global/networks/my-vpc \
+./scripts/prepare-shares.sh
+```
+
+Add `MANAGE_PSA=true` if the VPC has no Private Services Access yet, and
+`SHARE_REGIONS=region1,region2,region3` to choose where the shares live.
 
 ## One-command install
 
