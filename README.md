@@ -14,6 +14,15 @@ Marketplace.
 - Licence: use of the Software is governed by the [End User License Agreement](https://www.secretskydb.com/eula);
   the files in this repository are provided under the Apache License 2.0.
 
+## Install from Cloud Shell, nothing to install locally
+
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/hillelav/secretskydb-k8s-deploy&cloudshell_tutorial=docs/cloudshell-tutorial.md&cloudshell_workspace=.)
+
+The button opens Cloud Shell in your project with this repository checked out and a
+step-by-step walkthrough beside the terminal: pick the project, connect the cluster,
+prepare the shares, deploy, test. Cloud Shell already has gcloud, kubectl, terraform and
+helm.
+
 ## Three ways to install
 
 | Path | What you get | Billing |
