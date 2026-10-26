@@ -146,17 +146,25 @@ if [ -n "$REPORTING_SECRET" ]; then
 else
   HELM_ARGS+=( --set "ubbagent.enabled=false" )
 fi
-[ "$SHARES" = "test" ]        && HELM_ARGS+=( --set "testShares.enabled=true" )
+[ "$SHARES" = "test" ]        && HELM_ARGS+=( --set "testShares.enabled=true" --set "sharesSslmode=disable" )   # stand-in shares are plain Postgres, no TLS
 [ -n "$PROFILE" ]             && HELM_ARGS+=( --set "proxy.profile=$PROFILE" )
 [ -n "$CACHE_STORAGECLASS" ]  && HELM_ARGS+=( --set "cache.persistence.storageClass=$CACHE_STORAGECLASS" )
 [ -n "$LICENSE_KEY_FILE" ]    && HELM_ARGS+=( --set-file "license.key=$LICENSE_KEY_FILE" )
 [ -n "$USERS_SECRET" ]        && HELM_ARGS+=( --set "users.existingSecret=$USERS_SECRET" )
 [ -n "$TLS_SECRET" ]          && HELM_ARGS+=( --set "tls.enabled=true" --set "tls.secretName=$TLS_SECRET" )
+# A Job's template is immutable: on re-runs (upgrades) recreate the idempotent bootstrap Job.
+kubectl -n "$NAMESPACE" delete job "$RELEASE-bootstrap" --ignore-not-found >/dev/null 2>&1 || true
+EXISTED=false; helm -n "$NAMESPACE" status "$RELEASE" >/dev/null 2>&1 && EXISTED=true
 helm "${HELM_ARGS[@]}"
+if [ "$EXISTED" = "true" ]; then
+  # the proxy reads its share configuration at start: pick up changed values on an upgrade
+  kubectl -n "$NAMESPACE" rollout restart "statefulset/$RELEASE" >/dev/null
+  kubectl -n "$NAMESPACE" rollout status "statefulset/$RELEASE" --timeout=5m >/dev/null || true
+fi
 
 say "Waiting for the bootstrap Job (prepares the SQL functions on each share)"
-kubectl -n "$NAMESPACE" wait --for=condition=complete "job/$RELEASE-bootstrap-sql" --timeout=5m \
-  || echo "  (bootstrap Job still running; the proxy retries it — check: kubectl -n $NAMESPACE logs job/$RELEASE-bootstrap-sql)"
+kubectl -n "$NAMESPACE" wait --for=condition=complete "job/$RELEASE-bootstrap" --timeout=5m \
+  || echo "  (bootstrap Job still running; the proxy retries it — check: kubectl -n $NAMESPACE logs job/$RELEASE-bootstrap)"
 
 # ---- summary -----------------------------------------------------------------
 say "SecretSkyDB is installed"
