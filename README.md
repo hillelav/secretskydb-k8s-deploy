@@ -27,8 +27,8 @@ helm.
 
 | Path | What you get | Billing |
 |---|---|---|
-| **Marketplace console** (Configure → Deploy) | the proxy in your cluster, metered usage; `scripts/prepare-shares.sh` creates the share stores first | your GCP invoice |
-| **One command** (`scripts/install-secretskydb.sh`) | shares provisioned by Terraform **and** the proxy, in one run | metered if you pass the Marketplace reporting Secret, otherwise a licence token or a 14-day evaluation |
+| **Marketplace console** (Configure → Deploy) | the proxy and, with the quick-start box checked, its three share stores in your cluster, metered usage; for AlloyDB shares run `scripts/prepare-shares.sh` first | your GCP invoice |
+| **One command** (`scripts/install-secretskydb.sh`) | the proxy with in-cluster shares, or with shares provisioned on AlloyDB by Terraform, in one run | metered if you pass the Marketplace reporting Secret, otherwise a licence token or a 14-day evaluation |
 | **`mpdev install`** (command-line deployer) | the same deploy as the console, scripted | your GCP invoice |
 
 ## Prerequisites
@@ -45,10 +45,20 @@ helm.
   organization blocks it, an Organization Policy Administrator can override
   `iam.disableServiceAccountKeyCreation` for the project; see docs/INSTALL.md.
 
-## Prepare the shares, then deploy from the Marketplace
+## Deploy from the Marketplace
+
+Marketplace → SecretSkyDB → **Configure** → pick the cluster and namespace → **Deploy**.
+With **Create the three share stores inside this cluster** checked (the default) nothing
+else is needed: the application is ready in a few minutes, and its page shows the
+connection string and the password. All three custodians then share one cluster and one
+administrator, which is fine to start with and for many deployments; for custodians in
+separate trust domains, give the proxy AlloyDB shares instead.
+
+## AlloyDB shares: prepare them, then deploy from the Marketplace
 
 The Deploy button cannot create databases. This creates the three AlloyDB share
-instances and the shares Secret, then tells you what to enter in the deploy form:
+instances and the shares Secret, then tells you what to enter in the deploy form
+(uncheck the quick-start box there):
 
 ```sh
 git clone https://github.com/hillelav/secretskydb-k8s-deploy.git && cd secretskydb-k8s-deploy
@@ -61,6 +71,13 @@ and `SHARE_REGIONS=region1,region2,region3` to choose otherwise.
 
 ## One-command install
 
+Share stores inside the cluster, about 3 minutes:
+
+```sh
+git clone https://github.com/hillelav/secretskydb-k8s-deploy.git && cd secretskydb-k8s-deploy
+SHARES=incluster ./scripts/install-secretskydb.sh
+```
+
 Shares on AlloyDB, three regions, about 15 minutes:
 
 ```sh
@@ -69,13 +86,6 @@ git clone https://github.com/hillelav/secretskydb-k8s-deploy.git && cd secretsky
 ```
 
 (same defaults as `prepare-shares.sh`)
-
-Evaluation with three stand-in PostgreSQL pods inside the cluster, no Terraform,
-about 3 minutes (all shares in one trust domain, so not for production):
-
-```sh
-SHARES=test ./scripts/install-secretskydb.sh
-```
 
 Useful options (environment variables):
 

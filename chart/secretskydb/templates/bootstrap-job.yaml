@@ -37,7 +37,7 @@ spec:
               {{- range $i, $s := .Values.shares }}
               echo ">> {{ $s.name }} ({{ $s.region }}): ensure db '{{ $s.dbname }}' + UDF/schema"
               export PGPASSWORD="$SSDB_SHARE_{{ $i }}_PASSWORD"
-              export PGSSLMODE="{{ $.Values.sharesSslmode | default $s.sslmode | default "require" }}"
+              export PGSSLMODE="{{ include "secretskydb.shareSslmode" (dict "root" $ "share" $s) }}"
               H="$SSDB_SHARE_{{ $i }}_HOST"; U="$SSDB_SHARE_{{ $i }}_USER"
               # Wait for the share to accept connections (no Helm hook ordering: this
               # Job may start before the share Pod/instance is ready).
@@ -59,11 +59,11 @@ spec:
           env:
             {{- range $i, $s := .Values.shares }}
             - name: SSDB_SHARE_{{ $i }}_HOST
-              valueFrom: { secretKeyRef: { name: {{ $.Values.alloydbShareSecret }}, key: {{ $s.name }}-host } }
+              valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" $ }}, key: {{ $s.name }}-host } }
             - name: SSDB_SHARE_{{ $i }}_USER
-              valueFrom: { secretKeyRef: { name: {{ $.Values.alloydbShareSecret }}, key: {{ $s.name }}-user } }
+              valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" $ }}, key: {{ $s.name }}-user } }
             - name: SSDB_SHARE_{{ $i }}_PASSWORD
-              valueFrom: { secretKeyRef: { name: {{ $.Values.alloydbShareSecret }}, key: {{ $s.name }} } }
+              valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" $ }}, key: {{ $s.name }} } }
             {{- end }}
           volumeMounts:
             - { name: bootstrap-sql, mountPath: /sql, readOnly: true }

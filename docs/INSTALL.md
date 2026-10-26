@@ -13,6 +13,18 @@ There are two deployment paths:
 | **A. Scripted install** (this guide) | Direct / private-offer / air-gapped-ish deployments | By contract (metering off) |
 | **B. Marketplace 1-click** | Self-serve, usage-metered buyers | Auto-metered (`proxy_time`) |
 
+Both paths offer two homes for the three share stores:
+
+- **In this cluster (quick start, the default of the Marketplace form and `SHARES=incluster`).**
+  The chart runs three PostgreSQL share stores in the cluster, each on its own persistent
+  volume, with generated passwords. Nothing to prepare, ready in a few minutes. All three
+  custodians then share one cluster and one administrator: the "no single party holds
+  recoverable data" property holds against a compromised node or disk, not against the
+  cluster admin.
+- **AlloyDB (three regions recommended).** The custodians are separate managed instances
+  you own; `scripts/prepare-shares.sh` (or the Terraform in `terraform/`) creates them and
+  the shares Secret. This is the production topology.
+
 ---
 
 ## Prerequisites (both paths)
@@ -107,15 +119,16 @@ remove the Private Services Access peering and range.
 
 ## Path B — Marketplace 1-click (usage-metered)
 
-1. Provision the shares first (the app deploy can't create AlloyDB):
-   ```sh
-   cd terraform && terraform init
-   terraform apply -var project_id=<proj> -var network=<vpc-self-link> -var k8s_namespace=secretskydb
-   ```
-2. In the GCP console → **Marketplace → SecretSkyDB → Deploy**, target the same cluster
-   and namespace. The Marketplace deployer installs the app **and wires usage metering**
-   (the `proxy_time` metric → your bill).
-3. Connect your application as above.
+1. In the GCP console → **Marketplace → SecretSkyDB → Configure**: pick the cluster and
+   namespace. Leave **Create the three share stores inside this cluster** checked for the
+   quick start, click **Deploy**, and the application is ready in a few minutes. The
+   Marketplace deployer installs the app **and wires usage metering** (the `proxy_time`
+   metric → your bill).
+2. For AlloyDB shares instead: run `./scripts/prepare-shares.sh` first (it creates the three
+   instances and the Secret `secretskydb-alloydb-shares` in the target namespace), then
+   uncheck the box in the form and enter that Secret name.
+3. The application page shows the connection string and a link to the password of user
+   `ssdb` (the `proxy` key of the shares Secret). Connect your application as above.
 
 ---
 

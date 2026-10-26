@@ -17,6 +17,32 @@ spec:
         {{- include "secretskydb.labels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "secretskydb.serviceAccountName" . }}
+      initContainers:
+        # Wait until every share accepts connections to the proxy's database (the bootstrap
+        # Job creates it). The proxy opens its pools and the mirror's state tables at start;
+        # started before the shares exist (in-cluster shares, or a fresh AlloyDB database)
+        # it ran with half-initialised shares until the next restart (26 Oct 2026 test).
+        - name: wait-for-shares
+          image: {{ .Values.bootstrap.image }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              {{- range $i, $s := .Values.shares }}
+              export PGPASSWORD="$SSDB_SHARE_{{ add $i 1 }}_PASSWORD" PGSSLMODE="{{ include "secretskydb.shareSslmode" (dict "root" $ "share" $s) }}"
+              until psql -h "$SSDB_SHARE_{{ add $i 1 }}_HOST" -p {{ $s.port }} -U "$SSDB_SHARE_{{ add $i 1 }}_USER" -d "{{ $s.dbname }}" -tAc 'SELECT 1' >/dev/null 2>&1; do
+                echo "waiting for {{ $s.name }} ($SSDB_SHARE_{{ add $i 1 }}_HOST) database {{ $s.dbname }}"; sleep 5
+              done
+              echo "{{ $s.name }} ready"
+              {{- end }}
+          env:
+            {{- range $i, $s := .Values.shares }}
+            - name: SSDB_SHARE_{{ add $i 1 }}_HOST
+              valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" $ }}, key: {{ $s.name }}-host } }
+            - name: SSDB_SHARE_{{ add $i 1 }}_USER
+              valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" $ }}, key: {{ $s.name }}-user } }
+            - name: SSDB_SHARE_{{ add $i 1 }}_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" $ }}, key: {{ $s.name }} } }
+            {{- end }}
       containers:
         # ── SecretSkyDB proxy / reassembly engine ───────────────────────────
         - name: proxy
@@ -29,7 +55,7 @@ spec:
           env:
             # Client-facing proxy password (customer app auth); SCRAM-SHA-256 by default.
             - name: SSDB_PROXY_PASSWORD
-              valueFrom: { secretKeyRef: { name: {{ .Values.alloydbShareSecret }}, key: proxy } }
+              valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" . }}, key: proxy } }
             - name: SSDB_AUTH_METHOD
               value: "{{ .Values.proxy.authMethod | default "scram-sha-256" }}"
             {{- if or .Values.users.existingSecret .Values.users.list }}
@@ -70,7 +96,7 @@ spec:
             {{- if .Values.cache.enabled }}
             # In-pod cache password (must match the cache container below).
             - name: SSDB_CACHE_PASSWORD
-              valueFrom: { secretKeyRef: { name: {{ .Values.alloydbShareSecret }}, key: cache } }
+              valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" . }}, key: cache } }
             {{- end }}
             # Per-share host + password, injected by index from the shares Secret.
             # proxy.json references ${SSDB_SHARE_i_HOST} / ${SSDB_SHARE_i_PASSWORD}.
@@ -80,11 +106,11 @@ spec:
             # share-a, deadlocking on share-c (17 Sep 2026 GKE test).
             {{- range $i, $s := .Values.shares }}
             - name: SSDB_SHARE_{{ add $i 1 }}_HOST
-              valueFrom: { secretKeyRef: { name: {{ $.Values.alloydbShareSecret }}, key: {{ $s.name }}-host } }
+              valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" $ }}, key: {{ $s.name }}-host } }
             - name: SSDB_SHARE_{{ add $i 1 }}_USER
-              valueFrom: { secretKeyRef: { name: {{ $.Values.alloydbShareSecret }}, key: {{ $s.name }}-user } }
+              valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" $ }}, key: {{ $s.name }}-user } }
             - name: SSDB_SHARE_{{ add $i 1 }}_PASSWORD
-              valueFrom: { secretKeyRef: { name: {{ $.Values.alloydbShareSecret }}, key: {{ $s.name }} } }
+              valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" $ }}, key: {{ $s.name }} } }
             {{- end }}
           volumeMounts:
             - { name: proxy-config, mountPath: /config, readOnly: true }
@@ -150,7 +176,7 @@ spec:
             - name: POSTGRES_DB
               value: "{{ .Values.cache.db }}"
             - name: POSTGRES_PASSWORD
-              valueFrom: { secretKeyRef: { name: {{ .Values.alloydbShareSecret }}, key: cache } }
+              valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" . }}, key: cache } }
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           volumeMounts:

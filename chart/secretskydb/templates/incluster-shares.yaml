@@ -1,0 +1,153 @@
+{{- if .Values.inclusterShares.enabled }}
+{{- /*
+In-cluster share stores: three PostgreSQL StatefulSets (one per share), each on its own
+persistent volume, reached through a Service named <release>-<share>. The generated
+Secret <release>-shares carries the SAME keys the chart consumes everywhere: proxy, cache,
+<share> (password), <share>-host, <share>-user. See values.inclusterShares for the trust
+model (one cluster, one administrator) and when to move the shares to AlloyDB instead.
+
+Passwords: fixed values from values.inclusterShares.passwords (tests), else the values the
+Secret already holds (helm upgrade keeps them), else 24 random characters. A share pod sets
+its password from the Secret at every start (postStart ALTER USER), and its pod template
+carries a checksum of that password, so a changed Secret rolls the share and stays in sync.
+*/}}
+{{- $root := . }}
+{{- $secretName := include "secretskydb.sharesSecretName" . }}
+{{- $ex := dict }}
+{{- with (lookup "v1" "Secret" .Release.Namespace $secretName) }}{{ $ex = .data }}{{ end }}
+{{- $fixed := .Values.inclusterShares.passwords }}
+{{- $proxyPw := $fixed.proxy | default ((get $ex "proxy") | b64dec) | default (randAlphaNum 24) }}
+{{- $cachePw := $fixed.cache | default ((get $ex "cache") | b64dec) | default (randAlphaNum 24) }}
+{{- $sharePw := dict }}
+{{- range $s := .Values.shares }}
+{{- $_ := set $sharePw $s.name ($fixed.share | default ((get $ex $s.name) | b64dec) | default (randAlphaNum 24)) }}
+{{- end }}
+{{- $image := .Values.inclusterShares.image | default .Values.bootstrap.image }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "secretskydb.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  proxy: {{ $proxyPw | quote }}
+  cache: {{ $cachePw | quote }}
+  {{- range $s := .Values.shares }}
+  {{ $s.name }}: {{ get $sharePw $s.name | quote }}
+  {{ $s.name }}-host: {{ printf "%s-%s" $root.Release.Name $s.name | quote }}
+  {{ $s.name }}-user: {{ $s.user | quote }}
+  {{- end }}
+{{- range $s := .Values.shares }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $root.Release.Name }}-{{ $s.name }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "secretskydb.labels" $root | nindent 4 }}
+spec:
+  selector: { ssdb-share: {{ $s.name }} }
+  ports:
+    - { name: share, port: {{ $s.port }}, targetPort: {{ $s.port }} }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $root.Release.Name }}-{{ $s.name }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "secretskydb.labels" $root | nindent 4 }}
+    ssdb-share: {{ $s.name }}
+spec:
+  serviceName: {{ $root.Release.Name }}-{{ $s.name }}
+  replicas: 1
+  selector:
+    matchLabels: { ssdb-share: {{ $s.name }} }
+  template:
+    metadata:
+      # No app.kubernetes.io/name on the share PODS: the proxy Service selects pods by that
+      # label (and its port is named pg), so a share pod would otherwise be picked as a proxy
+      # endpoint. The StatefulSet and Service objects keep the app labels for ownership.
+      labels:
+        ssdb-share: {{ $s.name }}
+        app.kubernetes.io/component: share
+      annotations:
+        checksum/password: {{ get $sharePw $s.name | sha256sum | trunc 16 | quote }}
+    spec:
+      # Keep the three custodians on different nodes when the cluster allows it, so one
+      # lost node or disk holds at most one share.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchExpressions:
+                    - { key: ssdb-share, operator: Exists }
+      containers:
+        - name: postgres
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ $root.Values.imagePullPolicy | default "IfNotPresent" }}
+          args: ["postgres", "-c", "max_connections=200"]
+          ports:
+            - { name: share, containerPort: {{ $s.port }} }
+          env:
+            - { name: POSTGRES_USER, value: {{ $s.user | quote }} }
+            - { name: POSTGRES_DB,   value: postgres }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $secretName }}, key: {{ $s.name }} } }
+            - { name: PGPORT, value: {{ $s.port | quote }} }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    # Apply the Secret's password on every start (POSTGRES_PASSWORD only
+                    # counts at initdb). Over the local socket, which the image trusts.
+                    for n in $(seq 1 90); do
+                      if pg_isready -h /var/run/postgresql -p "$PGPORT" -U "$POSTGRES_USER" >/dev/null 2>&1 \
+                         && psql -h /var/run/postgresql -p "$PGPORT" -U "$POSTGRES_USER" -d postgres \
+                              -v ON_ERROR_STOP=1 -v pw="$POSTGRES_PASSWORD" \
+                              -c "ALTER USER \"$POSTGRES_USER\" PASSWORD :'pw'" >/dev/null 2>&1; then
+                        exit 0
+                      fi
+                      sleep 2
+                    done
+                    exit 0
+          volumeMounts:
+            - { name: share-data, mountPath: /var/lib/postgresql/data }
+          resources:
+            {{- toYaml $root.Values.inclusterShares.resources | nindent 12 }}
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ $s.user | quote }}, "-d", "postgres", "-p", {{ $s.port | quote }}]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      {{- if not $root.Values.inclusterShares.persistence.enabled }}
+      volumes:
+        # TEST ONLY (mpdev verify): ephemeral share, no StorageClass needed; data lost on restart.
+        - name: share-data
+          emptyDir: {}
+      {{- end }}
+  {{- if $root.Values.inclusterShares.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: share-data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- if $root.Values.inclusterShares.persistence.storageClass }}
+        storageClassName: {{ $root.Values.inclusterShares.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $root.Values.inclusterShares.persistence.size }}
+  {{- end }}
+{{- end }}
+{{- end }}

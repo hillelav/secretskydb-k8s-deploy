@@ -25,19 +25,32 @@ spec:
     links:
       - description: Documentation
         url: https://secretskydb.com/docs
+  # Shown on the Marketplace application page ("Application details"): how to connect.
+  info:
+    - name: Connect from inside the cluster
+      value: "host={{ .Release.Name }}.{{ .Release.Namespace }}.svc port={{ .Values.proxy.port }} user={{ .Values.proxyUser }} dbname={{ .Values.proxyDb }}"
+    - name: Password of user {{ .Values.proxyUser }}
+      type: Reference
+      valueFrom:
+        secretKeyRef:
+          name: {{ include "secretskydb.sharesSecretName" . }}
+          key: proxy
+    - name: Share stores
+      {{- if .Values.inclusterShares.enabled }}
+      value: "three PostgreSQL stores in this cluster (one administrator); move to AlloyDB for separated custodians"
+      {{- else }}
+      value: "AlloyDB, credentials in Secret {{ .Values.alloydbShareSecret }}"
+      {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ .Release.Name }}
   componentKinds:
     - group: apps/v1
       kind: StatefulSet
-    # Deployment + Secret: the `mpdev verify` stand-in shares are Deployments and the
-    # synthesized shares Secret carries the app labels. They must be listed here so the
-    # Marketplace set_ownership adds owner-refs to them — otherwise they aren't
-    # garbage-collected on uninstall and verify fails teardown ("resources not deleted").
-    # No-op in production: the chart creates no Secret/Deployment there.
-    - group: apps/v1
-      kind: Deployment
+    # Secret: the in-cluster shares' generated Secret carries the app labels and must be
+    # owned by the Application so uninstall garbage-collects it. The in-cluster share
+    # stores themselves are StatefulSets (listed above); their PVCs are kept, as the
+    # cache PVC is.
     - group: v1
       kind: Service
     - group: v1

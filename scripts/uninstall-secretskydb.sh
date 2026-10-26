@@ -5,8 +5,8 @@
 # Software it removes is proprietary and governed by the SecretSkyDB End User License
 # Agreement (https://www.secretskydb.com/eula). Contact: support@secretskydb.com
 #
-# SHARES=test (an install made with in-cluster stand-in shares) needs no NETWORK and
-# runs no Terraform: the stand-in pods go away with the Helm release.
+# SHARES=incluster (an install whose share stores run in the cluster) needs no NETWORK and
+# runs no Terraform: the share pods go away with the Helm release (their PVCs are kept).
 #
 # SecretSkyDB — customer uninstall. Removes the app (Helm) and then the share data
 # plane (Terraform: the 3 AlloyDB instances + the shares Secret).
@@ -27,6 +27,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null || true)}"
 [ -n "$PROJECT_ID" ] || { echo "ERROR: set PROJECT_ID (or 'gcloud config set project …')" >&2; exit 1; }
 SHARES="${SHARES:-alloydb}"
+[ "$SHARES" = "test" ] && SHARES=incluster
 if [ "$SHARES" = "alloydb" ]; then
   NETWORK="${NETWORK:-projects/$PROJECT_ID/global/networks/default}"   # same VPC as the install
 else
@@ -47,7 +48,7 @@ gcloud config set project "$PROJECT_ID" >/dev/null
 if [ "$SHARES" = "alloydb" ]; then
   say "This will DELETE the SecretSkyDB app and the 3 AlloyDB shares (ALL DATA) in project $PROJECT_ID."
 else
-  say "This will DELETE the SecretSkyDB app and its in-cluster stand-in shares (ALL DATA) in project $PROJECT_ID."
+  say "This will DELETE the SecretSkyDB app and its in-cluster share stores (ALL DATA) in project $PROJECT_ID."
 fi
 if [ "$AUTO_APPROVE" != "true" ]; then
   printf 'Type the project id to confirm: '; read -r c; [ "$c" = "$PROJECT_ID" ] || die "Aborted."

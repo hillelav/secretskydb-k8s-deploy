@@ -30,8 +30,14 @@ Replace the cluster name and region if you use an existing cluster.
 
 ## Choose a path
 
-**A. Marketplace, metered to your invoice (production).** Prepare the share stores,
-then click Deploy on the Marketplace listing:
+**A. Marketplace, metered to your invoice.** Open
+<walkthrough-menu-navigation sectionId="MARKETPLACE_SECTION">Marketplace</walkthrough-menu-navigation>,
+search **SecretSkyDB**, click **Configure**, pick your cluster and the namespace
+`secretskydb`, leave **Create the three share stores inside this cluster** checked and
+the licence key empty, and click **Deploy**. Ready in a few minutes; skip to **Test it**.
+
+**B. Marketplace with AlloyDB shares (custodians in separate trust domains).** Create the
+share stores first:
 
 ```sh
 ./scripts/prepare-shares.sh
@@ -41,16 +47,14 @@ It uses the project selected above and its `default` VPC, and adds Private Servi
 to that VPC if it is missing. Set `NETWORK=projects/{{project-id}}/global/networks/NAME` to
 use another VPC, and `SHARE_REGIONS=r1,r2,r3` to choose where the three shares live.
 
-When it finishes it prints the values for the deploy form. Open
-<walkthrough-menu-navigation sectionId="MARKETPLACE_SECTION">Marketplace</walkthrough-menu-navigation>,
-search **SecretSkyDB**, click **Configure**, enter those values, leave the licence key
-empty, and click **Deploy**.
+When it finishes it prints the values for the deploy form. Deploy as in A, but uncheck
+the quick-start box and enter the Secret name it printed.
 
-**B. Quick evaluation, no AlloyDB (three stand-in shares inside the cluster).**
-Everything in one command, about three minutes:
+**C. Without the Marketplace (14-day evaluation licence, not metered).** One command,
+share stores inside the cluster, about three minutes:
 
 ```sh
-SHARES=test ./scripts/install-secretskydb.sh
+SHARES=incluster ./scripts/install-secretskydb.sh
 ```
 
 ## Test it
@@ -59,7 +63,8 @@ Connect as to any PostgreSQL server:
 
 ```sh
 kubectl -n secretskydb port-forward svc/secretskydb 55432:55432 >/dev/null 2>&1 &
-PW=$(kubectl -n secretskydb get secret secretskydb-alloydb-shares -o jsonpath='{.data.proxy}' | base64 -d)
+PW=$(kubectl -n secretskydb get secret secretskydb-shares -o jsonpath='{.data.proxy}' 2>/dev/null || kubectl -n secretskydb get secret secretskydb-alloydb-shares -o jsonpath='{.data.proxy}')
+PW=$(echo "$PW" | base64 -d)
 PGPASSWORD=$PW psql "host=127.0.0.1 port=55432 user=ssdb dbname=ssdb"
 ```
 

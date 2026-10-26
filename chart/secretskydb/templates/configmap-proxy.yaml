@@ -46,7 +46,7 @@ data:
           "user": "${SSDB_SHARE_{{ add $i 1 }}_USER}",
           "password": "${SSDB_SHARE_{{ add $i 1 }}_PASSWORD}",
           "dbname": "{{ $s.dbname }}",
-          "sslmode": "{{ $.Values.sharesSslmode | default $s.sslmode | default "require" }}"
+          "sslmode": "{{ include "secretskydb.shareSslmode" (dict "root" $ "share" $s) }}"
         }
         {{- end }}
       ],

@@ -47,5 +47,5 @@ spec:
           echo "FAIL: round-trip mismatch (got '$got')"; exit 1
       env:
         - name: SSDB_PROXY_PASSWORD
-          valueFrom: { secretKeyRef: { name: {{ .Values.alloydbShareSecret }}, key: proxy } }
+          valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" . }}, key: proxy } }
 {{- end }}
