@@ -26,7 +26,7 @@
 #   SHARES=alloydb            alloydb | incluster
 #   NAMESPACE=secretskydb     Kubernetes namespace
 #   RELEASE=secretskydb       Helm release name (also the proxy Service name)
-#   TAG=0.3.1                 image tag; REGISTRY defaults to the Marketplace registry
+#   TAG=0.3.2                 image tag; REGISTRY defaults to the Marketplace registry
 #   PROFILE=                  proxy profile: share-read (default) | cache-first
 #   CACHE_STORAGECLASS=       encrypted-at-rest StorageClass for the cache volume ("" = cluster default)
 #   REPORTING_SECRET=         name of the Marketplace usage-reporting Secret (from your Marketplace
@@ -63,7 +63,7 @@ SHARES="${SHARES:-alloydb}"
 NAMESPACE="${NAMESPACE:-secretskydb}"
 RELEASE="${RELEASE:-secretskydb}"
 REGISTRY="${REGISTRY:-us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy}"
-TAG="${TAG:-0.3.1}"
+TAG="${TAG:-0.3.2}"
 PROFILE="${PROFILE:-}"
 CACHE_STORAGECLASS="${CACHE_STORAGECLASS:-}"
 REPORTING_SECRET="${REPORTING_SECRET:-}"
@@ -156,6 +156,7 @@ HELM_ARGS=(
   --set "proxy.image.tag=$TAG"
   --set "cache.image=$REGISTRY/cache:$TAG"
   --set "ubbagent.image=$REGISTRY/ubbagent:$TAG"
+  --set "bootstrap.image=$REGISTRY/postgres:$TAG"
   --wait --timeout 10m
 )
 if [ -n "$REPORTING_SECRET" ]; then
@@ -171,13 +172,7 @@ fi
 [ -n "$TLS_SECRET" ]          && HELM_ARGS+=( --set "tls.enabled=true" --set "tls.secretName=$TLS_SECRET" )
 # A Job's template is immutable: on re-runs (upgrades) recreate the idempotent bootstrap Job.
 kubectl -n "$NAMESPACE" delete job "$RELEASE-bootstrap" --ignore-not-found >/dev/null 2>&1 || true
-EXISTED=false; helm -n "$NAMESPACE" status "$RELEASE" >/dev/null 2>&1 && EXISTED=true
 helm "${HELM_ARGS[@]}"
-if [ "$EXISTED" = "true" ]; then
-  # the proxy reads its share configuration at start: pick up changed values on an upgrade
-  kubectl -n "$NAMESPACE" rollout restart "statefulset/$RELEASE" >/dev/null
-  kubectl -n "$NAMESPACE" rollout status "statefulset/$RELEASE" --timeout=5m >/dev/null || true
-fi
 
 say "Waiting for the bootstrap Job (prepares the SQL functions on each share)"
 kubectl -n "$NAMESPACE" wait --for=condition=complete "job/$RELEASE-bootstrap" --timeout=5m \

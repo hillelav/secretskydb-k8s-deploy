@@ -15,6 +15,11 @@ spec:
     metadata:
       labels:
         {{- include "secretskydb.labels" . | nindent 8 }}
+      annotations:
+        # Roll the pod exactly when its inputs change (proxy config, users, shares Secret name):
+        # a helm upgrade that only edits the ConfigMap would otherwise leave the running proxy
+        # on the old config until something else restarted it.
+        checksum/config: {{ print (include (print $.Template.BasePath "/configmap-proxy.yaml") .) (include "secretskydb.sharesSecretName" .) (.Values.users.existingSecret | default "") | sha256sum | trunc 16 | quote }}
     spec:
       serviceAccountName: {{ include "secretskydb.serviceAccountName" . }}
       initContainers:
@@ -179,6 +184,26 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" . }}, key: cache } }
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    # Apply the Secret's password at every start: POSTGRES_PASSWORD only counts
+                    # at initdb, and the cache volume outlives the Secret (reinstall into the
+                    # same namespace regenerates it; the proxy was then locked out of its cache).
+                    for n in $(seq 1 90); do
+                      if pg_isready -h /var/run/postgresql -p {{ .Values.cache.port }} -U "$POSTGRES_USER" >/dev/null 2>&1 \
+                         && psql -h /var/run/postgresql -p {{ .Values.cache.port }} -U "$POSTGRES_USER" -d postgres \
+                              -v ON_ERROR_STOP=1 -v pw="$POSTGRES_PASSWORD" \
+                              -c "ALTER USER \"$POSTGRES_USER\" PASSWORD :'pw'" >/dev/null 2>&1; then
+                        exit 0
+                      fi
+                      sleep 2
+                    done
+                    exit 0
           volumeMounts:
             - { name: cache-data, mountPath: /var/lib/postgresql/data }
           resources:

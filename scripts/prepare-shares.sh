@@ -100,6 +100,7 @@ cat <<EOF
   Now deploy from Google Cloud Marketplace: open the SecretSkyDB listing → Configure, and enter
     Cluster:                     $(kubectl config current-context)
     Namespace:                   $NAMESPACE
+    Create the three share stores inside this cluster:  UNCHECK (the shares are the AlloyDB instances)
     AlloyDB shares secret (name): $SHARE_SECRET
     Licence key:                 leave empty (the Marketplace entitlement is the licence)
   then click Deploy. The proxy comes up in a few minutes; usage is metered to your invoice.
@@ -107,7 +108,7 @@ cat <<EOF
   Prefer the command line? The same deploy, scripted (needs Google's mpdev tool and the
   reporting Secret from your Marketplace order):
     mpdev install --deployer=us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/deployer:0.3 \\
-      --parameters='{"name":"secretskydb","namespace":"$NAMESPACE","alloydbShareSecret":"$SHARE_SECRET","reportingSecret":"<your reporting secret>"}'
+      --parameters='{"name":"secretskydb","namespace":"$NAMESPACE","inclusterShares.enabled":false,"alloydbShareSecret":"$SHARE_SECRET","reportingSecret":"<your reporting secret>"}'
 
   To remove the shares later (ALL DATA on them): scripts/uninstall-secretskydb.sh with the same variables,
   after deleting the application.

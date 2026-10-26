@@ -6,7 +6,7 @@ description: >-
   three sub-threshold shares live on AlloyDB across three Google Cloud regions,
   or on three stores inside the cluster for a quick start.
 type: application
-version: 0.3.1
-appVersion: "0.3.1"
+version: 0.3.2
+appVersion: "0.3.2"
 icon: https://secretskydb.com/icon.png
 keywords: [postgresql, alloydb, security, post-quantum, secret-sharing, mpc, rag, vector-search]
