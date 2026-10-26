@@ -59,11 +59,11 @@ PW=$(kubectl -n secretskydb get secret secretskydb-alloydb-shares -o jsonpath='{
 PGPASSWORD=$PW psql "host=127.0.0.1 port=55432 user=ssdb dbname=ssdb"
 ```
 
-In `psql`, a table with a protected column:
+In `psql`, a table with a protected column (the `\;` sends the CREATE and its policy
+to the proxy together, so the column is Secret from its first row):
 
 ```sql
-CREATE TABLE emp (id int, name text, salary numeric);
-COMMENT ON COLUMN emp.salary IS 'Secret';
+CREATE TABLE emp (id int, name text, salary numeric) \; COMMENT ON COLUMN emp.salary IS 'SSDB: secret';
 INSERT INTO emp VALUES (1,'dana',12000),(2,'omer',15000);
 SELECT * FROM emp;
 SELECT sum(salary) FROM emp;
