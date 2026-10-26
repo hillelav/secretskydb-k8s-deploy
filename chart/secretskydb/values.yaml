@@ -19,7 +19,7 @@ proxy:
   profile: share-read
   image:
     repo: us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/proxy
-    tag: "0.3.2"
+    tag: "0.4.0"
   port: 55432
   authMethod: scram-sha-256  # or md5 for drivers that cannot do SCRAM
   mirrorWorkers: 2           # parallel apply workers for the share mirror (0 = serial); each holds a connection per share
@@ -45,7 +45,7 @@ cache:
   enabled: true
   # Postgres 16 + the wal2json output plugin (built from cache/Dockerfile).
   # wal_level=logical is set by the StatefulSet via server args, not the image.
-  image: us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/cache:0.3.2
+  image: us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/cache:0.4.0
   port: 5432
   user: ssdb_cache
   db: ssdb
@@ -73,7 +73,7 @@ cache:
 
 ubbagent:
   enabled: true            # disabled in apptest (mpdev verify) — no reporting secret there
-  image: us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/ubbagent:0.3.2
+  image: us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/ubbagent:0.4.0
   # Service Control service name. The deployer path now serves the LEGACY
   # K8s listing (case 72776243, 2026-08-31: private offers are supported only
   # on legacy K8s products, not Terraform-K8s) — so this is the legacy
@@ -130,7 +130,7 @@ bootstrap:
   # and the in-cluster share stores: the cache image (postgres:16-alpine, patched, + wal2json),
   # already served from the listing's registry and past its vulnerability gate, so a private
   # cluster without Docker Hub egress can deploy and no extra image enters the review.
-  image: us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/cache:0.3.2
+  image: us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/cache:0.4.0
 
 service:
   type: ClusterIP    # PSC / LoadBalancer can be layered for cross-cluster access

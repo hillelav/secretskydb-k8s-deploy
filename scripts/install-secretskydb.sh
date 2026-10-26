@@ -27,7 +27,7 @@
 #   NAMESPACE=secretskydb     Kubernetes namespace
 #   RELEASE=secretskydb       Helm release name (also the proxy Service name)
 #   RESTART=false             true to roll the proxy after an upgrade that re-pinned the same image tag
-#   TAG=0.3.2                 image tag; REGISTRY defaults to the Marketplace registry
+#   TAG=0.4.0                 image tag; REGISTRY defaults to the Marketplace registry
 #   PROFILE=                  proxy profile: share-read (default) | cache-first
 #   CACHE_STORAGECLASS=       encrypted-at-rest StorageClass for the cache volume ("" = cluster default)
 #   REPORTING_SECRET=         name of the Marketplace usage-reporting Secret (from your Marketplace
@@ -64,7 +64,7 @@ SHARES="${SHARES:-alloydb}"
 NAMESPACE="${NAMESPACE:-secretskydb}"
 RELEASE="${RELEASE:-secretskydb}"
 REGISTRY="${REGISTRY:-us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy}"
-TAG="${TAG:-0.3.2}"
+TAG="${TAG:-0.4.0}"
 PROFILE="${PROFILE:-}"
 CACHE_STORAGECLASS="${CACHE_STORAGECLASS:-}"
 REPORTING_SECRET="${REPORTING_SECRET:-}"
