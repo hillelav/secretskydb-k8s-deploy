@@ -151,12 +151,6 @@ resource "google_alloydb_instance" "share" {
 # share-a/b/c-user (DB users — distinct custodians when share_users is set).
 provider "kubernetes" {}
 
-# 0.3 renamed the resource; keep existing state from destroying and recreating the Secret
-moved {
-  from = kubernetes_secret.shares
-  to   = kubernetes_secret_v1.shares
-}
-
 resource "kubernetes_secret_v1" "shares" {
   count = var.create_k8s_secret ? 1 : 0
   metadata {

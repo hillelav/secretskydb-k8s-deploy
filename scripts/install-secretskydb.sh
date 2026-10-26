@@ -26,6 +26,7 @@
 #   SHARES=alloydb            alloydb | incluster
 #   NAMESPACE=secretskydb     Kubernetes namespace
 #   RELEASE=secretskydb       Helm release name (also the proxy Service name)
+#   RESTART=false             true to roll the proxy after an upgrade that re-pinned the same image tag
 #   TAG=0.3.2                 image tag; REGISTRY defaults to the Marketplace registry
 #   PROFILE=                  proxy profile: share-read (default) | cache-first
 #   CACHE_STORAGECLASS=       encrypted-at-rest StorageClass for the cache volume ("" = cluster default)
@@ -141,7 +142,11 @@ if [ "$SHARES" = "alloydb" ]; then
     REGION_LIST="$(printf '%s' "$SHARE_REGIONS" | sed 's/[[:space:]]//g; s/,/","/g')"
     TF_ARGS+=( -var "regions=[\"$REGION_LIST\"]" )
   fi
-  ( cd "$REPO_DIR/terraform" && terraform init -input=false && terraform apply "${TF_ARGS[@]}" )
+  # 0.3 renamed the Secret resource (kubernetes_secret -> _v1); move it in an older state instead of recreating it
+  ( cd "$REPO_DIR/terraform" && terraform init -input=false \
+    && { terraform state list 2>/dev/null | grep -q '^kubernetes_secret\.shares' \
+         && terraform state mv 'kubernetes_secret.shares[0]' 'kubernetes_secret_v1.shares[0]' || true; } \
+    && terraform apply "${TF_ARGS[@]}" )
   say "Verifying the shares Secret exists in namespace '$NAMESPACE'"
   kubectl -n "$NAMESPACE" get secret "$SHARE_SECRET" >/dev/null 2>&1 \
     || die "Secret '$SHARE_SECRET' not found in '$NAMESPACE' — Terraform did not write it (check the kube context / create_k8s_secret)."
@@ -156,7 +161,7 @@ HELM_ARGS=(
   --set "proxy.image.tag=$TAG"
   --set "cache.image=$REGISTRY/cache:$TAG"
   --set "ubbagent.image=$REGISTRY/ubbagent:$TAG"
-  --set "bootstrap.image=$REGISTRY/postgres:$TAG"
+  --set "bootstrap.image=$REGISTRY/cache:$TAG"
   --wait --timeout 10m
 )
 if [ -n "$REPORTING_SECRET" ]; then
@@ -173,6 +178,11 @@ fi
 # A Job's template is immutable: on re-runs (upgrades) recreate the idempotent bootstrap Job.
 kubectl -n "$NAMESPACE" delete job "$RELEASE-bootstrap" --ignore-not-found >/dev/null 2>&1 || true
 helm "${HELM_ARGS[@]}"
+if [ "${RESTART:-false}" = "true" ]; then
+  # a CVE rebuild re-pins the image under the same tag (imagePullPolicy Always): roll the proxy by hand
+  kubectl -n "$NAMESPACE" rollout restart "statefulset/$RELEASE" >/dev/null
+  kubectl -n "$NAMESPACE" rollout status "statefulset/$RELEASE" --timeout=5m >/dev/null || true
+fi
 
 say "Waiting for the bootstrap Job (prepares the SQL functions on each share)"
 kubectl -n "$NAMESPACE" wait --for=condition=complete "job/$RELEASE-bootstrap" --timeout=5m \

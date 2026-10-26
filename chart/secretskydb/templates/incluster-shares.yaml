@@ -116,10 +116,11 @@ spec:
                          && psql -h /var/run/postgresql -p "$PGPORT" -U "$POSTGRES_USER" -d postgres \
                               -v ON_ERROR_STOP=1 -v pw="$POSTGRES_PASSWORD" \
                               -c "ALTER USER \"$POSTGRES_USER\" PASSWORD :'pw'" >/dev/null 2>&1; then
-                        exit 0
+                        echo "[ssdb] share password synced from the Secret" >> /proc/1/fd/1 2>/dev/null; exit 0
                       fi
                       sleep 2
                     done
+                    echo "[ssdb] WARNING: share password NOT synced from the Secret after 180 s; the proxy may fail to authenticate" >> /proc/1/fd/1 2>/dev/null
                     exit 0
           volumeMounts:
             - { name: share-data, mountPath: /var/lib/postgresql/data }

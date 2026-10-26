@@ -127,9 +127,10 @@ shares:
 bootstrap:
   enabled: true
   # PostgreSQL client/server image, also used by the proxy's wait-for-shares init container
-  # and the in-cluster share stores. Served from the listing's registry (a copy of the
-  # official postgres:16-alpine) so a private cluster without Docker Hub egress can deploy.
-  image: us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/postgres:0.3.2
+  # and the in-cluster share stores: the cache image (postgres:16-alpine, patched, + wal2json),
+  # already served from the listing's registry and past its vulnerability gate, so a private
+  # cluster without Docker Hub egress can deploy and no extra image enters the review.
+  image: us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/cache:0.3.2
 
 service:
   type: ClusterIP    # PSC / LoadBalancer can be layered for cross-cluster access

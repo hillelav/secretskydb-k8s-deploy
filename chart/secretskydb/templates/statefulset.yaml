@@ -16,10 +16,12 @@ spec:
       labels:
         {{- include "secretskydb.labels" . | nindent 8 }}
       annotations:
-        # Roll the pod exactly when its inputs change (proxy config, users, shares Secret name):
-        # a helm upgrade that only edits the ConfigMap would otherwise leave the running proxy
-        # on the old config until something else restarted it.
-        checksum/config: {{ print (include (print $.Template.BasePath "/configmap-proxy.yaml") .) (include "secretskydb.sharesSecretName" .) (.Values.users.existingSecret | default "") | sha256sum | trunc 16 | quote }}
+        # Roll the pod exactly when its inputs change: the proxy ConfigMap, the chart's users
+        # Secret, and the CONTENT of the shares Secret (hosts/passwords rewritten by Terraform on
+        # a re-run; env from secretKeyRef is resolved at pod start, never live). The lookup is
+        # empty under `helm template` (the Marketplace deployer), where a single render is applied.
+        {{- $shares := (lookup "v1" "Secret" .Release.Namespace (include "secretskydb.sharesSecretName" .)) }}
+        checksum/config: {{ print (include (print $.Template.BasePath "/configmap-proxy.yaml") .) (include (print $.Template.BasePath "/secret-users.yaml") .) (toJson (default dict ($shares | default dict).data)) | sha256sum | trunc 16 | quote }}
     spec:
       serviceAccountName: {{ include "secretskydb.serviceAccountName" . }}
       initContainers:
@@ -199,10 +201,11 @@ spec:
                          && psql -h /var/run/postgresql -p {{ .Values.cache.port }} -U "$POSTGRES_USER" -d postgres \
                               -v ON_ERROR_STOP=1 -v pw="$POSTGRES_PASSWORD" \
                               -c "ALTER USER \"$POSTGRES_USER\" PASSWORD :'pw'" >/dev/null 2>&1; then
-                        exit 0
+                        echo "[ssdb] cache password synced from the Secret" >> /proc/1/fd/1 2>/dev/null; exit 0
                       fi
                       sleep 2
                     done
+                    echo "[ssdb] WARNING: cache password NOT synced from the Secret after 180 s; the proxy may fail to authenticate" >> /proc/1/fd/1 2>/dev/null
                     exit 0
           volumeMounts:
             - { name: cache-data, mountPath: /var/lib/postgresql/data }

@@ -89,7 +89,11 @@ if [ -n "$SHARE_REGIONS" ]; then
   REGION_LIST="$(printf '%s' "$SHARE_REGIONS" | sed 's/[[:space:]]//g; s/,/","/g')"
   TF_ARGS+=( -var "regions=[\"$REGION_LIST\"]" )
 fi
-( cd "$REPO_DIR/terraform" && terraform init -input=false && terraform apply "${TF_ARGS[@]}" )
+# 0.3 renamed the Secret resource (kubernetes_secret -> _v1); move it in an older state instead of recreating it
+( cd "$REPO_DIR/terraform" && terraform init -input=false \
+    && { terraform state list 2>/dev/null | grep -q '^kubernetes_secret\.shares' \
+         && terraform state mv 'kubernetes_secret.shares[0]' 'kubernetes_secret_v1.shares[0]' || true; } \
+    && terraform apply "${TF_ARGS[@]}" )
 
 kubectl -n "$NAMESPACE" get secret "$SHARE_SECRET" >/dev/null 2>&1 \
   || die "Secret '$SHARE_SECRET' not found in '$NAMESPACE' — Terraform did not write it (check the kube context)."
