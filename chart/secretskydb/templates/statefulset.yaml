@@ -16,12 +16,16 @@ spec:
       labels:
         {{- include "secretskydb.labels" . | nindent 8 }}
       annotations:
-        # Roll the pod exactly when its inputs change: the proxy ConfigMap, the chart's users
-        # Secret, and the CONTENT of the shares Secret (hosts/passwords rewritten by Terraform on
-        # a re-run; env from secretKeyRef is resolved at pod start, never live). The lookup is
-        # empty under `helm template` (the Marketplace deployer), where a single render is applied.
+        # Roll the pod exactly when its inputs change: the proxy ConfigMap, the chart's users and
+        # licence Secrets, and the CONTENT of the shares and TLS Secrets (rewritten by Terraform
+        # or rotated under the same name; env and volumes from a Secret are read at pod start,
+        # never live). The lookups are empty under `helm template` (the Marketplace deployer,
+        # one render) and on a fresh install, so the first helm upgrade after an install rolls
+        # the pod once; after that only a real change does.
         {{- $shares := (lookup "v1" "Secret" .Release.Namespace (include "secretskydb.sharesSecretName" .)) }}
-        checksum/config: {{ print (include (print $.Template.BasePath "/configmap-proxy.yaml") .) (include (print $.Template.BasePath "/secret-users.yaml") .) (toJson (default dict ($shares | default dict).data)) | sha256sum | trunc 16 | quote }}
+        {{- $tls := dict }}
+        {{- if .Values.tls.enabled }}{{ $tls = (lookup "v1" "Secret" .Release.Namespace .Values.tls.secretName) }}{{ end }}
+        checksum/config: {{ print (include (print $.Template.BasePath "/configmap-proxy.yaml") .) (include (print $.Template.BasePath "/secret-users.yaml") .) (include (print $.Template.BasePath "/secret-license.yaml") .) (toJson (default dict ($shares | default dict).data)) (toJson (default dict ($tls | default dict).data)) | sha256sum | trunc 16 | quote }}
     spec:
       serviceAccountName: {{ include "secretskydb.serviceAccountName" . }}
       initContainers:
