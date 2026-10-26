@@ -13,15 +13,16 @@
 # Marketplace listing; usage is metered to your Google Cloud invoice.  ~10-15 minutes.
 #
 # Usage:
+#   ./scripts/prepare-shares.sh                   # gcloud project, its default VPC
 #   PROJECT_ID=my-proj NETWORK=projects/my-proj/global/networks/my-vpc ./scripts/prepare-shares.sh
 #
 # Required env:
 #   PROJECT_ID        GCP project id (the cluster's project)
-#   NETWORK           VPC self-link with Private Services Access (MANAGE_PSA=true creates it)
+#   NETWORK           VPC self-link; default projects/$PROJECT_ID/global/networks/default
 # Optional env (defaults shown):
 #   NAMESPACE=secretskydb     namespace you will deploy into (the Secret is written there)
 #   SHARE_REGIONS=            comma-separated AlloyDB regions for the three shares
-#   MANAGE_PSA=false          true to create Private Services Access on a fresh VPC
+#   MANAGE_PSA                true/false; default: detected (true when the VPC has no PSA peering yet)
 #   AUTO_APPROVE=false        skip the confirmation prompt
 #
 set -euo pipefail
@@ -29,11 +30,24 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-PROJECT_ID="${PROJECT_ID:?set PROJECT_ID to your GCP project id}"
-NETWORK="${NETWORK:?set NETWORK to a VPC self-link with Private Services Access}"
+# ---- defaults a Cloud Shell user need not type -----------------------------------
+# PROJECT_ID falls back to the gcloud default; NETWORK to the project's "default" VPC;
+# MANAGE_PSA is detected: true when that VPC has no Private Services Access peering yet.
+PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null || true)}"
+[ -n "$PROJECT_ID" ] || { echo "ERROR: set PROJECT_ID (or 'gcloud config set project …')" >&2; exit 1; }
+_default_network() { printf 'projects/%s/global/networks/default' "$PROJECT_ID"; }
+_detect_psa() {   # prints true when the network has no servicenetworking peering
+  local net="${1##*/}" peer
+  peer="$(gcloud services vpc-peerings list --network="$net" --project="$PROJECT_ID" \
+            --format='value(peering)' 2>/dev/null | grep -c servicenetworking || true)"
+  [ "$peer" = "0" ] && echo true || echo false
+}
+NETWORK="${NETWORK:-$(_default_network)}"
+[ -z "$NETWORK" ] || gcloud compute networks describe "${NETWORK##*/}" --project="$PROJECT_ID" >/dev/null 2>&1 \
+  || { echo "ERROR: VPC '$NETWORK' not found in $PROJECT_ID; set NETWORK=projects/$PROJECT_ID/global/networks/<name>" >&2; exit 1; }
 NAMESPACE="${NAMESPACE:-secretskydb}"
 SHARE_REGIONS="${SHARE_REGIONS:-}"
-MANAGE_PSA="${MANAGE_PSA:-false}"
+MANAGE_PSA="${MANAGE_PSA:-$(_detect_psa "$NETWORK")}"
 AUTO_APPROVE="${AUTO_APPROVE:-false}"
 SHARE_SECRET="secretskydb-alloydb-shares"
 APP_CRD_URL="https://raw.githubusercontent.com/GoogleCloudPlatform/marketplace-k8s-app-tools/master/crd/app-crd.yaml"

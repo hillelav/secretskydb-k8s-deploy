@@ -52,13 +52,12 @@ instances and the shares Secret, then tells you what to enter in the deploy form
 
 ```sh
 git clone https://github.com/hillelav/secretskydb-k8s-deploy.git && cd secretskydb-k8s-deploy
-PROJECT_ID=my-project \
-NETWORK=projects/my-project/global/networks/my-vpc \
 ./scripts/prepare-shares.sh
 ```
 
-Add `MANAGE_PSA=true` if the VPC has no Private Services Access yet, and
-`SHARE_REGIONS=region1,region2,region3` to choose where the shares live.
+Defaults: the gcloud project, its `default` VPC, and Private Services Access added to
+that VPC if missing. Set `PROJECT_ID`, `NETWORK=projects/PROJECT/global/networks/NAME`
+and `SHARE_REGIONS=region1,region2,region3` to choose otherwise.
 
 ## One-command install
 
@@ -66,16 +65,16 @@ Shares on AlloyDB, three regions, about 15 minutes:
 
 ```sh
 git clone https://github.com/hillelav/secretskydb-k8s-deploy.git && cd secretskydb-k8s-deploy
-PROJECT_ID=my-project \
-NETWORK=projects/my-project/global/networks/my-vpc \
 ./scripts/install-secretskydb.sh
 ```
+
+(same defaults as `prepare-shares.sh`)
 
 Evaluation with three stand-in PostgreSQL pods inside the cluster, no Terraform,
 about 3 minutes (all shares in one trust domain, so not for production):
 
 ```sh
-PROJECT_ID=my-project SHARES=test ./scripts/install-secretskydb.sh
+SHARES=test ./scripts/install-secretskydb.sh
 ```
 
 Useful options (environment variables):
@@ -89,7 +88,9 @@ Useful options (environment variables):
 | `PROFILE` | `share-read` (default) or `cache-first`; see the install guide |
 | `SHARE_REGIONS` | comma-separated AlloyDB regions for the three shares |
 | `CACHE_STORAGECLASS` | encrypted-at-rest StorageClass for the proxy's cache volume |
-| `NAMESPACE`, `RELEASE`, `TAG`, `MANAGE_PSA`, `AUTO_APPROVE` | as named |
+| `PROJECT_ID`, `NETWORK` | default: the gcloud project and its `default` VPC |
+| `MANAGE_PSA` | default: detected; `true` adds Private Services Access to the VPC |
+| `NAMESPACE`, `RELEASE`, `TAG`, `AUTO_APPROVE` | as named |
 
 The script prints the connection details when it finishes. To remove everything,
 including the AlloyDB shares and their data, run `scripts/uninstall-secretskydb.sh`

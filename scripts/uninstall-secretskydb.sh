@@ -15,20 +15,20 @@
 #     Back up first if you need to keep anything.
 #
 # Usage:
-#   PROJECT_ID=my-proj NETWORK=projects/my-proj/global/networks/my-vpc \
-#     ./scripts/uninstall-secretskydb.sh
+#   ./scripts/uninstall-secretskydb.sh            # same PROJECT_ID / NETWORK as the install
 #
-# Env mirrors install-secretskydb.sh: PROJECT_ID, NETWORK (required),
+# Env mirrors install-secretskydb.sh: PROJECT_ID, NETWORK (defaults: gcloud project, its default VPC),
 #   NAMESPACE=secretskydb, MANAGE_PSA=false, AUTO_APPROVE=false, KEEP_NAMESPACE=false
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-PROJECT_ID="${PROJECT_ID:?set PROJECT_ID}"
+PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null || true)}"
+[ -n "$PROJECT_ID" ] || { echo "ERROR: set PROJECT_ID (or 'gcloud config set project …')" >&2; exit 1; }
 SHARES="${SHARES:-alloydb}"
 if [ "$SHARES" = "alloydb" ]; then
-  NETWORK="${NETWORK:?set NETWORK (same VPC self-link used to install)}"
+  NETWORK="${NETWORK:-projects/$PROJECT_ID/global/networks/default}"   # same VPC as the install
 else
   NETWORK=""
 fi
@@ -65,7 +65,7 @@ if [ "$SHARES" = "alloydb" ]; then
       -var "project_id=$PROJECT_ID" \
       -var "network=$NETWORK" \
       -var "k8s_namespace=$NAMESPACE" \
-      -var "manage_psa=${MANAGE_PSA:-false}"
+      -var "manage_psa=${MANAGE_PSA:-$(terraform state list 2>/dev/null | grep -q service_networking_connection && echo true || echo false)}"
   )
 fi
 

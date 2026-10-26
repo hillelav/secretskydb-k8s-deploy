@@ -34,8 +34,12 @@ Replace the cluster name and region if you use an existing cluster.
 then click Deploy on the Marketplace listing:
 
 ```sh
-PROJECT_ID={{project-id}} NETWORK=projects/{{project-id}}/global/networks/default MANAGE_PSA=true ./scripts/prepare-shares.sh
+./scripts/prepare-shares.sh
 ```
+
+It uses the project selected above and its `default` VPC, and adds Private Services Access
+to that VPC if it is missing. Set `NETWORK=projects/{{project-id}}/global/networks/NAME` to
+use another VPC, and `SHARE_REGIONS=r1,r2,r3` to choose where the three shares live.
 
 When it finishes it prints the values for the deploy form. Open
 <walkthrough-menu-navigation sectionId="MARKETPLACE_SECTION">Marketplace</walkthrough-menu-navigation>,
@@ -46,7 +50,7 @@ empty, and click **Deploy**.
 Everything in one command, about three minutes:
 
 ```sh
-PROJECT_ID={{project-id}} SHARES=test ./scripts/install-secretskydb.sh
+SHARES=test ./scripts/install-secretskydb.sh
 ```
 
 ## Test it

@@ -53,13 +53,18 @@ There are two deployment paths:
 One command provisions the shares (Terraform) and installs the app (Helm):
 
 ```sh
-export PROJECT_ID=my-project
-export NETWORK=projects/my-project/global/networks/my-vpc   # VPC self-link (with PSA)
-# optional:
-export NAMESPACE=secretskydb
-export CACHE_STORAGECLASS=<your-encrypted-at-rest-class>     # else cluster default
-export MANAGE_PSA=false                                      # true to create PSA on a fresh VPC
+./scripts/install-secretskydb.sh
+```
 
+With no variables it uses the gcloud project, its `default` VPC, and adds Private
+Services Access (PSA) to that VPC when missing. To choose otherwise:
+
+```sh
+export PROJECT_ID=my-project
+export NETWORK=projects/my-project/global/networks/my-vpc   # another VPC
+export SHARE_REGIONS=europe-west1,europe-west4,europe-west9  # where the three shares live
+export CACHE_STORAGECLASS=<your-encrypted-at-rest-class>     # else cluster default
+export MANAGE_PSA=true                                       # force PSA creation (default: detected)
 ./scripts/install-secretskydb.sh
 ```
 
@@ -86,7 +91,7 @@ or PSC — do **not** put the proxy on the public internet.
 
 ### Uninstall
 ```sh
-PROJECT_ID=my-project NETWORK=<same-vpc-self-link> ./scripts/uninstall-secretskydb.sh
+./scripts/uninstall-secretskydb.sh      # same PROJECT_ID / NETWORK as the install, if you set them
 ```
 ⚠️ This runs `terraform destroy` — it deletes the AlloyDB shares and **all data**. Back up first.
 

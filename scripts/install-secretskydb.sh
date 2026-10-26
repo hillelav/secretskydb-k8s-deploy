@@ -15,12 +15,13 @@
 #                             one trust domain.  ~3 minutes.
 #
 # Usage:
+#   ./scripts/install-secretskydb.sh              # gcloud project, its default VPC, AlloyDB shares
+#   SHARES=test ./scripts/install-secretskydb.sh  # evaluation, stand-in shares in the cluster
 #   PROJECT_ID=my-proj NETWORK=projects/my-proj/global/networks/my-vpc ./scripts/install-secretskydb.sh
-#   PROJECT_ID=my-proj SHARES=test ./scripts/install-secretskydb.sh
 #
 # Required env:
 #   PROJECT_ID          GCP project id (the cluster's project)
-#   NETWORK             VPC self-link with Private Services Access, SHARES=alloydb only
+#   NETWORK             VPC self-link, SHARES=alloydb only; default the project's 'default' VPC
 # Optional env (defaults shown):
 #   SHARES=alloydb            alloydb | test
 #   NAMESPACE=secretskydb     Kubernetes namespace
@@ -37,7 +38,7 @@
 #                             default: the single admin user "ssdb" (password in the shares Secret)
 #   TLS_SECRET=               kubernetes.io/tls Secret for inbound TLS on the proxy (clients must use TLS)
 #   SHARE_REGIONS=            comma-separated AlloyDB regions, e.g. europe-west1,australia-southeast1,asia-southeast1
-#   MANAGE_PSA=false          true to create Private Services Access on a fresh VPC (alloydb only)
+#   MANAGE_PSA                true/false; default: detected (true when the VPC has no PSA peering yet)
 #   AUTO_APPROVE=false        skip the confirmation prompt (automation)
 #
 set -euo pipefail
@@ -45,7 +46,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-PROJECT_ID="${PROJECT_ID:?set PROJECT_ID to your GCP project id}"
+# ---- defaults a Cloud Shell user need not type -----------------------------------
+# PROJECT_ID falls back to the gcloud default; NETWORK to the project's "default" VPC;
+# MANAGE_PSA is detected: true when that VPC has no Private Services Access peering yet.
+PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null || true)}"
+[ -n "$PROJECT_ID" ] || { echo "ERROR: set PROJECT_ID (or 'gcloud config set project …')" >&2; exit 1; }
+_default_network() { printf 'projects/%s/global/networks/default' "$PROJECT_ID"; }
+_detect_psa() {   # prints true when the network has no servicenetworking peering
+  local net="${1##*/}" peer
+  peer="$(gcloud services vpc-peerings list --network="$net" --project="$PROJECT_ID" \
+            --format='value(peering)' 2>/dev/null | grep -c servicenetworking || true)"
+  [ "$peer" = "0" ] && echo true || echo false
+}
 SHARES="${SHARES:-alloydb}"
 NAMESPACE="${NAMESPACE:-secretskydb}"
 RELEASE="${RELEASE:-secretskydb}"
@@ -58,7 +70,7 @@ LICENSE_KEY_FILE="${LICENSE_KEY_FILE:-}"
 USERS_SECRET="${USERS_SECRET:-}"
 TLS_SECRET="${TLS_SECRET:-}"
 SHARE_REGIONS="${SHARE_REGIONS:-}"
-MANAGE_PSA="${MANAGE_PSA:-false}"
+MANAGE_PSA="${MANAGE_PSA:-}"
 AUTO_APPROVE="${AUTO_APPROVE:-false}"
 SHARE_SECRET="secretskydb-alloydb-shares"
 APP_CRD_URL="https://raw.githubusercontent.com/GoogleCloudPlatform/marketplace-k8s-app-tools/master/crd/app-crd.yaml"
@@ -67,7 +79,10 @@ say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 die() { printf '\n\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 case "$SHARES" in
-  alloydb) NETWORK="${NETWORK:?set NETWORK to a VPC self-link with Private Services Access (or use SHARES=test)}" ;;
+  alloydb) NETWORK="${NETWORK:-$(_default_network)}"
+           [ -z "$NETWORK" ] || gcloud compute networks describe "${NETWORK##*/}" --project="$PROJECT_ID" >/dev/null 2>&1 \
+             || { echo "ERROR: VPC '$NETWORK' not found in $PROJECT_ID; set NETWORK=projects/$PROJECT_ID/global/networks/<name>" >&2; exit 1; }
+           MANAGE_PSA="${MANAGE_PSA:-$(_detect_psa "$NETWORK")}" ;;
   test)    NETWORK="" ;;
   *)       die "SHARES must be 'alloydb' or 'test' (got '$SHARES')" ;;
 esac
