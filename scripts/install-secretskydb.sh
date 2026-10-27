@@ -59,6 +59,7 @@ _detect_psa() {   # prints true when the network has no servicenetworking peerin
             --format='value(peering)' 2>/dev/null | grep -c servicenetworking || true)"
   [ "$peer" = "0" ] && echo true || echo false
 }
+SHARES_GIVEN="${SHARES+x}"
 SHARES="${SHARES:-alloydb}"
 [ "$SHARES" = "test" ] && SHARES=incluster   # old name
 NAMESPACE="${NAMESPACE:-secretskydb}"
@@ -132,6 +133,25 @@ if ! kubectl get crd applications.app.k8s.io >/dev/null 2>&1; then
 fi
 kubectl get ns "$NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$NAMESPACE"
 
+# ---- existing release: upgrade in place -------------------------------------
+# An upgrade keeps every value of the installed release (--reuse-values); only what is set
+# explicitly below changes. The share layout follows the release unless SHARES is given:
+# upgrading an AlloyDB install must not create in-cluster shares, and vice versa.
+EXISTING=""
+if helm status "$RELEASE" --namespace "$NAMESPACE" >/dev/null 2>&1; then
+  EXISTING="yes"
+  if [ -z "$SHARES_GIVEN" ]; then
+    if helm get values "$RELEASE" --namespace "$NAMESPACE" -o yaml 2>/dev/null | grep -A1 '^inclusterShares:' | grep -q 'enabled: true'; then
+      SHARES=incluster
+    else
+      SHARES=alloydb
+    fi
+    say "Release '$RELEASE' exists: upgrading in place (shares: $SHARES, from the release; set SHARES to change)"
+  else
+    say "Release '$RELEASE' exists: upgrading in place"
+  fi
+fi
+
 # ---- shares ------------------------------------------------------------------
 if [ "$SHARES" = "alloydb" ]; then
   say "Provisioning AlloyDB shares + '$SHARE_SECRET' Secret (Terraform)"
@@ -164,12 +184,14 @@ HELM_ARGS=(
   --set "bootstrap.image=$REGISTRY/cache:$TAG"
   --wait --timeout 10m
 )
+[ -n "$EXISTING" ] && HELM_ARGS+=( --reuse-values )
 if [ -n "$REPORTING_SECRET" ]; then
   HELM_ARGS+=( --set "ubbagent.enabled=true" --set "reportingSecret=$REPORTING_SECRET" )
 else
   HELM_ARGS+=( --set "ubbagent.enabled=false" )
 fi
-[ "$SHARES" = "incluster" ]   && HELM_ARGS+=( --set "inclusterShares.enabled=true" )   # the chart runs the three share stores in the cluster
+if [ "$SHARES" = "incluster" ]; then HELM_ARGS+=( --set "inclusterShares.enabled=true" )    # the chart runs the three share stores in the cluster
+else                              HELM_ARGS+=( --set "inclusterShares.enabled=false" ); fi
 [ -n "$PROFILE" ]             && HELM_ARGS+=( --set "proxy.profile=$PROFILE" )
 [ -n "$CACHE_STORAGECLASS" ]  && HELM_ARGS+=( --set "cache.persistence.storageClass=$CACHE_STORAGECLASS" )
 [ -n "$LICENSE_KEY_FILE" ]    && HELM_ARGS+=( --set-file "license.key=$LICENSE_KEY_FILE" )

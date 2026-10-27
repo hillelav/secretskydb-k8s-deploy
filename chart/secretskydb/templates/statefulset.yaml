@@ -69,10 +69,6 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" . }}, key: proxy } }
             - name: SSDB_AUTH_METHOD
               value: "{{ .Values.proxy.authMethod | default "scram-sha-256" }}"
-            {{- range $k, $v := .Values.proxy.env }}
-            - name: {{ $k }}
-              value: {{ $v | quote }}
-            {{- end }}
             {{- if or .Values.users.existingSecret .Values.users.list }}
             # Additional users with roles (0.3): the users.json of the Secret, see values.users
             - name: SSDB_USERS_FILE
@@ -126,6 +122,12 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" $ }}, key: {{ $s.name }}-user } }
             - name: SSDB_SHARE_{{ add $i 1 }}_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" $ }}, key: {{ $s.name }} } }
+            {{- end }}
+            # Extra proxy settings (values.proxy.env), rendered LAST so an override of a variable the
+            # chart sets above takes effect (duplicate names: the last entry wins)
+            {{- range $k, $v := .Values.proxy.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
             {{- end }}
           volumeMounts:
             - { name: proxy-config, mountPath: /config, readOnly: true }
