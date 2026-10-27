@@ -144,6 +144,18 @@ remove the Private Services Access peering and range.
   each AlloyDB share (AlloyDB is managed Postgres, so no C extension).
 - **3 AlloyDB shares** — one sub-threshold share per region; only shares ever leave the pod.
 
+### Schema changes
+
+`CREATE TABLE`, `ALTER TABLE`, `DROP TABLE` and `COMMENT ON COLUMN` take part in the client's
+transaction as on plain PostgreSQL (0.4): they commit with the data around them, a `ROLLBACK`
+discards them, and the share stores receive the change at its exact position in the replication
+stream. Declare policies at creation time (`COMMENT ON COLUMN t.c IS 'SSDB: secret'`, in the same
+statement batch or the same transaction) or afterwards while the column holds no value. A read of
+a Secret column of a freshly created table waits for the share stores to carry the table
+(`SSDB_DDL_READ_WAIT_S`, default 10 s; raise it through `proxy.env` in the values when the shares
+are far away). Rows a transaction writes to a Secret column are readable after its `COMMIT`. One
+rule remains: send `DROP TABLE` as its own statement, not inside a multi-statement batch.
+
 ## Shared responsibility
 
 SecretSkyDB's guarantees split cleanly between what mathematics enforces and what
@@ -316,7 +328,7 @@ deploy-form user). `SSDB_ALLOW_NO_AUTH=1` serves unauthenticated — for test ri
     `CREATE TABLE … ` of each table (recovery backfill); then clear the apply state as above.
   - *You know the gap is harmless* (nothing was written in the window): set
     `SSDB_FANOUT_IDENTITY_CHECK=0` on the proxy (`proxy.env` in the values) for one start.
-  A `ssdb-resync` tool that performs the first two cases ships in 0.3.1.
+  Both procedures are manual in 0.4 (an `ssdb-resync` tool is planned).
 
 - **AlloyDB apply fails / hangs on peering** → the VPC lacks PSA. Re-run with `MANAGE_PSA=true`.
 - **Secret not found after Terraform** → `kubectl` isn't pointed at the target cluster, or

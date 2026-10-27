@@ -69,6 +69,10 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ include "secretskydb.sharesSecretName" . }}, key: proxy } }
             - name: SSDB_AUTH_METHOD
               value: "{{ .Values.proxy.authMethod | default "scram-sha-256" }}"
+            {{- range $k, $v := .Values.proxy.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
             {{- if or .Values.users.existingSecret .Values.users.list }}
             # Additional users with roles (0.3): the users.json of the Secret, see values.users
             - name: SSDB_USERS_FILE
