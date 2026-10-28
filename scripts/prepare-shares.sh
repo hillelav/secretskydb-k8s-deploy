@@ -111,7 +111,7 @@ cat <<EOF
 
   Prefer the command line? The same deploy, scripted (needs Google's mpdev tool and the
   reporting Secret from your Marketplace order):
-    mpdev install --deployer=us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/deployer:0.3 \\
+    mpdev install --deployer=us-docker.pkg.dev/secretskydb-public/secretskydb-private-legacy/deployer:0.4 \\
       --parameters='{"name":"secretskydb","namespace":"$NAMESPACE","inclusterShares.enabled":false,"alloydbShareSecret":"$SHARE_SECRET","reportingSecret":"<your reporting secret>"}'
 
   To remove the shares later (ALL DATA on them): scripts/uninstall-secretskydb.sh with the same variables,

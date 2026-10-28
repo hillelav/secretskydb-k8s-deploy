@@ -86,16 +86,27 @@ bootstrap Job) → waits for readiness → prints connection details.
 
 > AlloyDB provisioning takes ~10–15 minutes. The clusters are billable.
 
+**Upgrading.** Run the same command again against the installed release: the script detects it,
+keeps every value of the release (share layout, licence, metering, storage class) and only moves
+the image tag (`TAG`, default the release this checkout ships). Set `RESTART=true` when the tag
+did not change but the images were re-pinned. AlloyDB shares are not re-provisioned on an upgrade
+(`REAPPLY_SHARES=true` re-runs Terraform, from the checkout that holds its state); the share
+layout of a release cannot be changed in place, the script refuses `SHARES=` that differs from
+the release. Marketplace (deployer) installs are upgraded from the Marketplace listing, not with
+this script.
+
 ### Connect your application
 Point your app at the proxy Service as a normal PostgreSQL server:
 
 - **Host:** `secretskydb.<namespace>.svc.cluster.local` (in-cluster)
 - **Port:** `55432`
 - **Database:** `ssdb`  **User:** `ssdb`
-- **Password:** the `proxy` key of Secret `secretskydb-alloydb-shares`
+- **Password:** the `proxy` key of Secret `secretskydb-alloydb-shares` (AlloyDB shares) or
+  `<release>-shares` (quick start, in-cluster shares: `secretskydb-shares` by default)
 
 ```sh
 kubectl -n secretskydb get secret secretskydb-alloydb-shares -o jsonpath='{.data.proxy}' | base64 -d
+# quick start: kubectl -n secretskydb get secret secretskydb-shares -o jsonpath='{.data.proxy}' | base64 -d
 ```
 
 For access from outside the cluster, expose the Service via an internal LoadBalancer
@@ -152,9 +163,13 @@ discards them, and the share stores receive the change at its exact position in 
 stream. Declare policies at creation time (`COMMENT ON COLUMN t.c IS 'SSDB: secret'`, in the same
 statement batch or the same transaction) or afterwards while the column holds no value. A read of
 a Secret column of a freshly created table waits for the share stores to carry the table
-(`SSDB_DDL_READ_WAIT_S`, default 10 s; raise it through `proxy.env` in the values when the shares
-are far away). Rows a transaction writes to a Secret column are readable after its `COMMIT`. One
-rule remains: send `DROP TABLE` as its own statement, not inside a multi-statement batch.
+(`SSDB_DDL_READ_WAIT_S`, default 10 s; raise it when the shares are far away: `proxy.env` in the
+values of a Helm install, or `kubectl -n <namespace> set env statefulset/<release> -c proxy SSDB_DDL_READ_WAIT_S=30`
+on a Marketplace install, which has no values file). Rows a transaction writes to a Secret column are readable after its `COMMIT`.
+Names are read as PostgreSQL reads them (quoted names keep their case, unquoted fold to lower case)
+and resolve in `public` unless schema-qualified. Not supported through the proxy, refused with a
+message: `CREATE TABLE … AS` / `PARTITION OF` / `INHERITS`, generated columns, DDL inside `DO` or
+`CALL` bodies, `SELECT … INTO`, and `COPY … TO` of a table with a Secret column.
 
 ## Shared responsibility
 
@@ -237,9 +252,9 @@ date.
   that cannot do SCRAM (plaintext-password users only). The deploy-form user (`proxyUser`,
   password in the shares Secret's `proxy` key) is an **admin**; add further users under
   `users.list` (0.3) — see *Users, roles and audit* below.
-- **Share links** use TLS to AlloyDB (`sharesSslmode`). Key exchange is classical (X25519 /
-  ECDHE) in 0.2 and 0.3.0; hybrid post-quantum key exchange (X25519 + ML-KEM, OpenSSL 3.5)
-  follows in the next image.
+- **Share links** use TLS to AlloyDB (`sharesSslmode`). Since 0.3 the key exchange is hybrid
+  post-quantum (X25519 + ML-KEM-768, `X25519MLKEM768`, OpenSSL 3.5 in the bundled client; see
+  `docs/PQ_TLS.md`); 0.2 negotiated classical X25519 / ECDHE.
 - **Exposure** (`service.type`, `service.loadBalancerIP`, `service.loadBalancerSourceRanges`):
   the Service is ClusterIP by default. If you expose it with a LoadBalancer, always set
   `loadBalancerSourceRanges`; never publish the proxy to `0.0.0.0/0`.
@@ -326,8 +341,12 @@ deploy-form user). `SSDB_ALLOW_NO_AUTH=1` serves unauthenticated — for test ri
   - *The shares are the source of truth and the cache is empty* (cache disk lost): keep the
     shares, give the proxy an empty cache and let it rebuild from the shares on the next
     `CREATE TABLE … ` of each table (recovery backfill); then clear the apply state as above.
-  - *You know the gap is harmless* (nothing was written in the window): set
-    `SSDB_FANOUT_IDENTITY_CHECK=0` on the proxy (`proxy.env` in the values) for one start.
+  - *You know the gap is harmless* (nothing was written in the window): start the proxy once with
+    `SSDB_FANOUT_IDENTITY_CHECK=0` (`proxy.env` in the values of a Helm install;
+    `kubectl -n <namespace> set env statefulset/<release> -c proxy SSDB_FANOUT_IDENTITY_CHECK=0` on a
+    Marketplace install), then put the check back: the variable persists on the StatefulSet
+    (`kubectl -n <namespace> set env statefulset/<release> -c proxy SSDB_FANOUT_IDENTITY_CHECK-`, or
+    remove it from `proxy.env`), which restarts the proxy once more.
   Both procedures are manual in 0.4 (an `ssdb-resync` tool is planned).
 
 - **AlloyDB apply fails / hangs on peering** → the VPC lacks PSA. Re-run with `MANAGE_PSA=true`.

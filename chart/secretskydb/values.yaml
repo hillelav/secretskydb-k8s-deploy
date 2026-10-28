@@ -24,7 +24,9 @@ proxy:
   authMethod: scram-sha-256  # or md5 for drivers that cannot do SCRAM
   mirrorWorkers: 2           # parallel apply workers for the share mirror (0 = serial); each holds a connection per share
   servingProcesses: 2        # proxy serving processes (one port, balanced accept); raise with the CPU limit
-  env: {}                    # extra proxy environment, e.g. { SSDB_DDL_READ_WAIT_S: "30" } (docs/INSTALL.md)
+  env: {}                    # extra proxy environment, e.g. { SSDB_DDL_READ_WAIT_S: "30" } (docs/INSTALL.md);
+                             # a Marketplace (deployer) install sets such variables with kubectl set env instead.
+                             # SSDB_MIRROR_WORKERS / SSDB_WORKERS: use mirrorWorkers / servingProcesses above
   serviceAccount: ""        # set by Marketplace (SERVICE_ACCOUNT)
   resources:
     requests: { cpu: "500m", memory: "512Mi" }
