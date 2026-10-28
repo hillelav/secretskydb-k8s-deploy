@@ -27,14 +27,15 @@ Both paths offer two homes for the three share stores:
 
 ---
 
-## Prerequisites (both paths)
+## Prerequisites
 
 - A **GKE cluster** (Standard or Autopilot) in your project, and `kubectl` pointed at it:
   `gcloud container clusters get-credentials <cluster> --region <region>`
-- A **VPC with Private Services Access (PSA)** — AlloyDB peers over it. If your VPC
-  doesn't have PSA yet, the script can create it (`MANAGE_PSA=true`).
-- CLI tools: `gcloud`, `kubectl`, `terraform`, `helm`.
-- IAM: rights to create AlloyDB, enable APIs, and manage the cluster namespace.
+- CLI tools: `gcloud`, `kubectl`, `helm` (the quick start with in-cluster shares needs nothing else).
+- **AlloyDB shares only:** `terraform`; a **VPC with Private Services Access (PSA)** — AlloyDB
+  peers over it, and the script can create the peering (`MANAGE_PSA=true`); IAM rights to create
+  AlloyDB instances and enable APIs.
+- IAM: rights to manage the cluster namespace.
 - An **encrypted-at-rest StorageClass** for the proxy's on-prem cache (recommended —
   the cache holds plaintext at rest inside your boundary).
 - **Marketplace path only — service-account keys must be allowed in the project.**

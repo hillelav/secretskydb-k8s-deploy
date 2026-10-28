@@ -66,8 +66,9 @@ echo "  namespace:  $NAMESPACE"
 echo "  regions:    ${SHARE_REGIONS:-module defaults}"
 
 if [ "$AUTO_APPROVE" != "true" ]; then
+  [ -t 0 ] || die "stdin is not a terminal: set AUTO_APPROVE=true for a non-interactive run"
   printf '\nThis creates 3 AlloyDB instances (billable, ~10-15 min) and the shares Secret in the cluster above.\nProceed? [y/N] '
-  read -r ans; [ "$ans" = "y" ] || [ "$ans" = "Y" ] || die "Aborted."
+  read -r ans || ans=""; [ "$ans" = "y" ] || [ "$ans" = "Y" ] || die "Aborted."
 fi
 
 gcloud config set project "$PROJECT_ID" >/dev/null

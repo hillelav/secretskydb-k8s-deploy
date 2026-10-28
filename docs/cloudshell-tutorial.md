@@ -92,8 +92,10 @@ curl -s http://127.0.0.1:55433/statusz | python3 -m json.tool
 kubectl delete application/secretskydb -n secretskydb
 ```
 
-For path A, `./scripts/uninstall-secretskydb.sh` with the same variables also destroys the
-AlloyDB shares and all data on them. Delete the evaluation cluster when you are done:
+A release installed with the script (path C) is a Helm release as well: remove it with
+`helm -n secretskydb uninstall secretskydb`. For path B (AlloyDB shares),
+`./scripts/uninstall-secretskydb.sh` with the same variables also destroys the AlloyDB shares
+and all data on them. Delete the evaluation cluster when you are done:
 
 ```sh
 gcloud container clusters delete secretskydb-eval --region us-central1 --project {{project-id}}
