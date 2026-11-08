@@ -118,14 +118,13 @@ helm "${ARGS[@]}" --wait --timeout 15m >/dev/null
 
 step "waiting for the proxy"
 kubectl -n "$NAMESPACE" rollout status statefulset/"$RELEASE" --timeout=10m >/dev/null
-PW="$(kubectl -n "$NAMESPACE" get secret "$RELEASE-shares" -o jsonpath='{.data.proxy}' 2>/dev/null | base64 -d || true)"
 
 echo
 printf "%b\n" "${G}${B}SecretSkyDB is running in $NAMESPACE.${N}"
 echo "  in-cluster     host=$RELEASE.$NAMESPACE.svc port=55432 dbname=ssdb user=ssdb"
 echo "  password       kubectl -n $NAMESPACE get secret $RELEASE-shares -o jsonpath='{.data.proxy}' | base64 -d"
 echo "  from a laptop  kubectl -n $NAMESPACE port-forward svc/$RELEASE 55432:55432"
-echo "                 PGPASSWORD='${PW:-<password>}' psql -h 127.0.0.1 -p 55432 -U ssdb -d ssdb"
+echo "                 PGPASSWORD=\"\$(kubectl -n $NAMESPACE get secret $RELEASE-shares -o jsonpath='{.data.proxy}' | base64 -d)\" psql -h 127.0.0.1 -p 55432 -U ssdb -d ssdb"
 echo "  licence/status kubectl -n $NAMESPACE port-forward pod/$RELEASE-0 55433:55433 &  curl -s http://127.0.0.1:55433/statusz"
 if [ -n "$REPORTING_SECRET" ]; then echo "  billing        usage reports hourly to Google Cloud Marketplace; it appears on your GCP invoice within a day"; fi
 echo "  remove         helm -n $NAMESPACE uninstall $RELEASE   (volumes are kept: kubectl -n $NAMESPACE delete pvc --all)"
