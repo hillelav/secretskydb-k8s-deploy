@@ -27,6 +27,12 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . | quote }}
+        {{- end }}
+      {{- end }}
       containers:
         - name: bootstrap
           image: {{ .Values.bootstrap.image }}
