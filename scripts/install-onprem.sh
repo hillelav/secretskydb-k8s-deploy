@@ -93,8 +93,10 @@ if kubectl -n "$NAMESPACE" get secret "$PULL_SECRET" >/dev/null 2>&1; then
   step "image-pull Secret $PULL_SECRET already exists, keeping it"
 elif [ -n "$REPORTING_SECRET" ]; then
   step "image-pull Secret $PULL_SECRET for $REGISTRY"
+  # The Secret's reporting-key is itself a base64 JSON key (ubbagent reads it that way), so the value
+  # from .data is base64 twice; one decode leaves the base64 key the registry takes as _json_key_base64.
   kubectl -n "$NAMESPACE" create secret docker-registry "$PULL_SECRET" \
-    --docker-server=marketplace.gcr.io --docker-username=_json_key \
+    --docker-server=marketplace.gcr.io --docker-username=_json_key_base64 \
     --docker-password="$(printf '%s' "$KEY_B64" | base64 -d)" --docker-email=unused@example.com >/dev/null
 else
   die "no image-pull Secret '$PULL_SECRET' in $NAMESPACE and no KEY_FILE to create it from. Either pass KEY_FILE, or create it:
