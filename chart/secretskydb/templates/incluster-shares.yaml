@@ -77,6 +77,12 @@ spec:
       annotations:
         checksum/password: {{ get $sharePw $s.name | sha256sum | trunc 16 | quote }}
     spec:
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . | quote }}
+        {{- end }}
+      {{- end }}
       # Keep the three custodians on different nodes when the cluster allows it, so one
       # lost node or disk holds at most one share.
       affinity:
@@ -111,11 +117,13 @@ spec:
                   - |
                     # Apply the Secret's password on every start (POSTGRES_PASSWORD only
                     # counts at initdb). Over the local socket, which the image trusts.
+                    # The statement goes in on stdin: psql interpolates :'pw' there, not in -c
+                    # (with -c the server received the literal :'pw' and raised a syntax error).
                     for n in $(seq 1 90); do
                       if pg_isready -h /var/run/postgresql -p "$PGPORT" -U "$POSTGRES_USER" >/dev/null 2>&1 \
-                         && psql -h /var/run/postgresql -p "$PGPORT" -U "$POSTGRES_USER" -d postgres \
-                              -v ON_ERROR_STOP=1 -v pw="$POSTGRES_PASSWORD" \
-                              -c "ALTER USER \"$POSTGRES_USER\" PASSWORD :'pw'" >/dev/null 2>&1; then
+                         && echo "ALTER USER \"$POSTGRES_USER\" PASSWORD :'pw';" \
+                            | psql -h /var/run/postgresql -p "$PGPORT" -U "$POSTGRES_USER" -d postgres \
+                                -v ON_ERROR_STOP=1 -v pw="$POSTGRES_PASSWORD" >/dev/null 2>&1; then
                         echo "[ssdb] share password synced from the Secret" >> /proc/1/fd/1 2>/dev/null; exit 0
                       fi
                       sleep 2

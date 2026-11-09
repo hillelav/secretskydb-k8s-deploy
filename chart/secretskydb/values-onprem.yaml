@@ -1,0 +1,39 @@
+# SecretSkyDB on your own Kubernetes cluster (on-premises, another cloud), billed through
+# Google Cloud Marketplace. See docs/ONPREM.md for the five steps. Merge over values.yaml:
+#   helm install secretskydb ./chart/secretskydb -n secretskydb -f chart/secretskydb/values-onprem.yaml \
+#     --set reportingSecret=<name of the Secret created from the downloaded key>
+
+# Images: Google's Marketplace mirror serves the images of your order to authenticated Google
+# identities. Create a docker-registry Secret from the service-account key you downloaded on the
+# product's "Deploy via command line" tab and name it here (docs/ONPREM.md, step 2).
+imagePullSecrets: [ gcr-pull ]
+proxy:
+  image:
+    repo: marketplace.gcr.io/secretskydb-public/secretskydb/proxy
+    tag: "0.4.0"
+cache:
+  image: marketplace.gcr.io/secretskydb-public/secretskydb/cache:0.4.0
+  persistence:
+    storageClass: ""          # an encrypted-at-rest class of your cluster; "" = cluster default
+bootstrap:
+  image: marketplace.gcr.io/secretskydb-public/secretskydb/cache:0.4.0
+ubbagent:
+  enabled: true               # hourly usage reports to Google = your Marketplace bill (needs HTTPS egress)
+  image: marketplace.gcr.io/secretskydb-public/secretskydb/ubbagent:0.4.0
+
+# Google's Application CRD is not present on a cluster that is not GKE.
+application:
+  enabled: false
+
+# The three share stores run in this cluster, one PostgreSQL StatefulSet each with its own
+# volume. For separated custodians point the chart at three PostgreSQL servers you own instead
+# (Secret secretskydb-alloydb-shares, see docs/INSTALL.md "Share stores").
+inclusterShares:
+  enabled: true
+  persistence:
+    storageClass: ""          # prefer an encrypted-at-rest class
+
+# Reach the proxy from outside the cluster: keep ClusterIP and port-forward for a test, or
+# switch to LoadBalancer with TLS and a source allow-list for real clients (docs/INSTALL.md).
+service:
+  type: ClusterIP

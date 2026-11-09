@@ -28,6 +28,12 @@ spec:
         checksum/config: {{ print (include (print $.Template.BasePath "/configmap-proxy.yaml") .) (include (print $.Template.BasePath "/secret-users.yaml") .) (include (print $.Template.BasePath "/secret-license.yaml") .) (toJson (default dict ($shares | default dict).data)) (toJson (default dict ($tls | default dict).data)) | sha256sum | trunc 16 | quote }}
     spec:
       serviceAccountName: {{ include "secretskydb.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . | quote }}
+        {{- end }}
+      {{- end }}
       initContainers:
         # Wait until every share accepts connections to the proxy's database (the bootstrap
         # Job creates it). The proxy opens its pools and the mirror's state tables at start;

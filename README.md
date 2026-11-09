@@ -1,4 +1,4 @@
-# Deploying SecretSkyDB on GKE
+# Deploying SecretSkyDB on GKE or on your own Kubernetes
 
 SecretSkyDB is a wire-compatible PostgreSQL proxy that stores every protected value
 as 2-of-3 secret shares across separate database instances, so no single server,
@@ -30,6 +30,21 @@ helm.
 | **Marketplace console** (Configure → Deploy) | the proxy and, with the quick-start box checked, its three share stores in your cluster, metered usage; for AlloyDB shares run `scripts/prepare-shares.sh` first | your GCP invoice |
 | **One command** (`scripts/install-secretskydb.sh`) | the proxy with in-cluster shares, or with shares provisioned on AlloyDB by Terraform, in one run | metered if you pass the Marketplace reporting Secret, otherwise a licence token or a 14-day evaluation |
 | **`mpdev install`** (command-line deployer) | the same deploy as the console, scripted | your GCP invoice |
+| **Your own cluster** (`scripts/install-onprem.sh`, on-premises or another cloud) | the proxy with in-cluster shares on any Kubernetes, from the product page's *Deploy via command line* tab; see [docs/ONPREM.md](docs/ONPREM.md) | your GCP invoice (metered through Google Cloud Marketplace) |
+
+## Your own Kubernetes cluster (on-premises)
+
+The *Deploy via command line* tab of the product page is the path for clusters that are not
+GKE. Download the reporting service-account key there (step 1 of the tab), then:
+
+```sh
+git clone https://github.com/hillelav/secretskydb-k8s-deploy.git && cd secretskydb-k8s-deploy
+KEY_FILE=~/Downloads/service-account-key.yaml ./scripts/install-onprem.sh
+```
+
+Three minutes later the proxy answers on port 55432 inside your cluster; usage is metered
+through Google Cloud Marketplace exactly as on GKE, and your data never leaves the cluster.
+Details, prerequisites (outbound HTTPS to Google), exposure and upgrades: [docs/ONPREM.md](docs/ONPREM.md).
 
 ## Prerequisites
 

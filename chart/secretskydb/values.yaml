@@ -28,6 +28,21 @@ proxy:
                              # a Marketplace (deployer) install sets such variables with kubectl set env instead.
                              # SSDB_MIRROR_WORKERS / SSDB_WORKERS: use mirrorWorkers / servingProcesses above
   serviceAccount: ""        # set by Marketplace (SERVICE_ACCOUNT)
+
+# Registry credentials for clusters outside GKE (on-premises, other clouds). The Marketplace
+# images are served to authenticated Google identities only; on GKE the node's service account
+# is enough, elsewhere create a docker-registry Secret from a Google service-account key and
+# name it here. Applied to every pod of the release (proxy, bootstrap Job, in-cluster shares).
+#   kubectl -n secretskydb create secret docker-registry gcr-pull \
+#     --docker-server=marketplace.gcr.io --docker-username=_json_key \
+#     --docker-password="$(cat key.json)" --docker-email=unused@example.com
+imagePullSecrets: []        # e.g. [ gcr-pull ]
+
+# The Application resource (app.k8s.io/v1beta1) needs Google's Application CRD, present on GKE
+# and installed by the Marketplace deployer. On other clusters set enabled: false (or install the
+# CRD: kubectl apply -f https://raw.githubusercontent.com/GoogleCloudPlatform/marketplace-k8s-app-tools/master/crd/app-crd.yaml).
+application:
+  enabled: true
   resources:
     requests: { cpu: "500m", memory: "512Mi" }
     limits:   { cpu: "2",    memory: "2Gi" }
