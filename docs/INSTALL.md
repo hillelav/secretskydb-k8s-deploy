@@ -32,6 +32,8 @@ Both paths offer two homes for the three share stores:
 - A **GKE cluster** (Standard or Autopilot) in your project, and `kubectl` pointed at it:
   `gcloud container clusters get-credentials <cluster> --region <region>`
 - CLI tools: `gcloud`, `kubectl`, `helm` (the quick start with in-cluster shares needs nothing else).
+  `kubectl` reaches GKE through the `gke-gcloud-auth-plugin` component. Cloud Shell has it; the
+  **Ubuntu snap** of `google-cloud-cli` does not and cannot add it — see *Troubleshooting*.
 - **AlloyDB shares only:** `terraform`; a **VPC with Private Services Access (PSA)** — AlloyDB
   peers over it, and the script can create the peering (`MANAGE_PSA=true`); IAM rights to create
   AlloyDB instances and enable APIs.
@@ -323,6 +325,30 @@ deploy-form user). `SSDB_ALLOW_NO_AUTH=1` serves unauthenticated — for test ri
 
 ## Troubleshooting
 
+- **`gke-gcloud-auth-plugin` not found / `kubectl` cannot authenticate, on Ubuntu** → `gcloud`
+  was installed from snap. That package ships without the plugin and blocks installing
+  components into itself. Replace it with Google's apt packages:
+
+  ```bash
+  sudo snap remove google-cloud-cli
+  sudo apt-get update
+  sudo apt-get install -y apt-transport-https ca-certificates gnupg curl
+  curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+  echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
+  sudo apt-get update && sudo apt-get install -y google-cloud-cli google-cloud-cli-gke-gcloud-auth-plugin
+  ```
+
+  Open a **new terminal** (the old one still looks for `/snap/bin/gcloud` and answers
+  `No such file or directory`; `hash -r` also clears it), then sign in and fetch the cluster
+  credentials again:
+
+  ```bash
+  gcloud auth login
+  gcloud container clusters get-credentials <cluster> --region <region> --project <project>
+  ```
+- **DBeaver on Ubuntu cannot connect** → the same kind of problem was reported with the
+  `dbeaver-ce` build from Ubuntu's own software store; installing DBeaver from
+  [dbeaver.io](https://dbeaver.io/download/) instead resolved it. `psql` is not affected.
 - **`SecretSkyDB is not licensed`** on connect → see *Licence*: install or renew the token
   (`kubectl -n <ns> get secret <release>-license`), then restart the proxy pod or wait for the
   hourly re-check. `/statusz` shows why (expired, wrong project, evaluation ended).
