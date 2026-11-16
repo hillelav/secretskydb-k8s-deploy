@@ -112,6 +112,16 @@ kubectl -n secretskydb get secret secretskydb-alloydb-shares -o jsonpath='{.data
 # quick start: kubectl -n secretskydb get secret secretskydb-shares -o jsonpath='{.data.proxy}' | base64 -d
 ```
 
+From your own machine, `scripts/connect.sh` does the first connection in one step: it checks
+the local tools (and says exactly what to fix — for example a snap-installed `gcloud`), fetches
+the cluster credentials, prints the password and opens a port-forward on `127.0.0.1:55432`:
+
+```sh
+./scripts/connect.sh <cluster> <region-or-zone>
+# or, without a checkout:
+curl -fsSL https://storage.googleapis.com/secretskydb-downloads/connect.sh | bash -s -- <cluster> <region-or-zone>
+```
+
 For access from outside the cluster, expose the Service via an internal LoadBalancer
 or PSC — do **not** put the proxy on the public internet.
 
@@ -326,7 +336,7 @@ deploy-form user). `SSDB_ALLOW_NO_AUTH=1` serves unauthenticated — for test ri
 ## Troubleshooting
 
 - **`gke-gcloud-auth-plugin` not found / `kubectl` cannot authenticate, on Ubuntu** → `gcloud`
-  was installed from snap. That package ships without the plugin and blocks installing
+  was installed from snap (`./scripts/connect.sh --check` detects this). That package ships without the plugin and blocks installing
   components into itself. Replace it with Google's apt packages:
 
   ```bash
