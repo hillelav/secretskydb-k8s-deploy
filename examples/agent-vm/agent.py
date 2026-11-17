@@ -19,6 +19,11 @@ The model (served by Ollama on this machine) decides which tool to call:
     open_claim        INSERT a claim.
     set_claim_status  UPDATE a claim.
 
+Two safeguards that do not depend on the model behaving:
+  * the read tools connect as a proxy user with the role "reader", the write tools as one with the
+    role "writer"; the admin user is used only to load the sample data;
+  * an amount in an answer must be found in what the tools returned (see "figure check").
+
 The agent speaks the PostgreSQL protocol to the SecretSkyDB proxy; there is no other database.
 Columns marked Secret below are stored only as shares on the three share stores.
 
@@ -60,6 +65,17 @@ SSDB = dict(
     user=os.environ.get("SSDB_USER", "ssdb"),
     password=os.environ.get("SSDB_PASSWORD", ""),
 )
+# The agent's tools do not use the admin user. Reads go through a proxy user with the role
+# "reader" (SELECT only), the two write tools through one with the role "writer" (no DDL); the
+# proxy enforces the role, whatever SQL the model writes. vm-setup.sh creates both. Without
+# them (an older setup) everything falls back to the admin user and `check` says so.
+def _role_user(prefix: str) -> dict:
+    u, pw = os.environ.get(f"SSDB_{prefix}_USER"), os.environ.get(f"SSDB_{prefix}_PASSWORD")
+    return dict(SSDB, user=u, password=pw) if u and pw else SSDB
+
+
+ROLES = {"admin": SSDB, "reader": _role_user("READER"), "writer": _role_user("WRITER")}
+
 OLLAMA = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 MODEL = os.environ.get("MODEL", "qwen2.5:7b")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "all-minilm")
@@ -74,14 +90,15 @@ OFF = "\033[0m" if sys.stdout.isatty() else ""
 
 
 # ───────────────────────────── SecretSkyDB ─────────────────────────────
-def db():
-    conn = psycopg2.connect(connect_timeout=10, **SSDB)
+def db(role: str = "admin"):
+    conn = psycopg2.connect(connect_timeout=10, **ROLES[role])
     conn.autocommit = True
     return conn
 
 
-def run(sql: str, args: tuple = (), fetch: bool = True):
-    conn = db()
+def run(sql: str, args: tuple = (), fetch: bool = True, role: str = "admin"):
+    """role: admin (sample data, checks), reader (everything the model reads), writer (the write tools)."""
+    conn = db(role)
     try:
         with conn.cursor() as cur:
             cur.execute(sql, args or None)   # None: a literal % in the model's SQL is not a placeholder
@@ -121,7 +138,7 @@ def vec(v: list[int]) -> str:
 def chat(messages: list[dict], tools: list[dict]) -> dict:
     r = requests.post(
         f"{OLLAMA}/api/chat",
-        json={"model": MODEL, "messages": messages, "stream": False, "keep_alive": KEEP_ALIVE,
+        json={"model": MODEL, "messages": [{k: v for k, v in m.items() if k != "_check"} for m in messages], "stream": False, "keep_alive": KEEP_ALIVE,
               "options": {"temperature": 0, "num_ctx": 8192}, **({"tools": tools} if tools else {})},
         timeout=900,
     )
@@ -135,11 +152,11 @@ def search_handbook(query: str, k: int = 4) -> dict:
     (only the id next to the score, no ORDER BY), sort here, then fetch the best passages by id."""
     q = embed([query])[0]
     _, rows = run(f'SELECT "_id"::text, intvec_ff_inner_product("emb", \'{vec(q)}\'::intvector) AS score '
-                  f'FROM "handbook_chunk";')
+                  f'FROM "handbook_chunk";', role="reader")
     top = sorted((r for r in rows if r[1] is not None), key=lambda r: r[1], reverse=True)[:k]
     passages = []
     for cid, score in top:
-        _, got = run('SELECT "title","chunk" FROM "handbook_chunk" WHERE "_id"::text = %s;', (cid,))
+        _, got = run('SELECT "title","chunk" FROM "handbook_chunk" WHERE "_id"::text = %s;', (cid,), role="reader")
         if got:
             passages.append({"title": clean(got[0][0]), "text": clean(got[0][1]),
                              "similarity": round(float(score) / (SCALE * SCALE), 3)})
@@ -157,18 +174,20 @@ def query_database(sql: str) -> dict:
         return {"error": "query the customers and claims tables only"}
     try:
         try:
-            cols, rows = run(s + ";")
+            cols, rows = run(s + ";", role="reader")
         except psycopg2.Error as e:
-            # Known proxy fault: a literal % (a LIKE pattern) in a single-table SELECT that reads
-            # a Secret column is taken for a parameter placeholder. Doubling it gets through.
+            # Proxy fault in 0.4.0 (fixed in 0.4.1): a literal % (a LIKE pattern) in a single-table
+            # SELECT that reads a Secret column is taken for a parameter placeholder. Doubling it
+            # gets through.
             if "allowed as placeholders" not in str(e) or "%" not in s:
                 raise
-            cols, rows = run(s.replace("%", "%%") + ";")
+            cols, rows = run(s.replace("%", "%%") + ";", role="reader")
     except Exception as e:  # the model reads the error and can correct its query
         err = str(e).strip().splitlines()[0][:300]
         m = re.search(r'Secret column "?(\w+)"? cannot be used in a filter or join', err)
         if m:
-            # the proxy's wording ("reconstruction failed") makes a model give up; say what to do
+            # 0.4.0 words this as "reconstruction failed (cluster degraded)", which makes a model
+            # give up (0.4.1 reports the refusal itself); say what to do
             err = (f"Query not run. The column {m.group(1)} is Secret: it can be SELECTed, but it may not appear in "
                    f"WHERE, JOIN, GROUP BY or ORDER BY (not even 'IS NOT NULL'). The data is available: "
                    f"run the same query again without the condition on {m.group(1)}.")
@@ -178,7 +197,7 @@ def query_database(sql: str) -> dict:
 
 
 def open_claim(customer_id: str, customer_name: str, kind: str, description: str, amount_ils: int) -> dict:
-    _, rows = run("SELECT name FROM customers WHERE id = %s;", (customer_id,))
+    _, rows = run("SELECT name FROM customers WHERE id = %s;", (customer_id,), role="reader")
     if not rows:
         return {"error": f"no customer with id {customer_id}"}
     # a write needs the id and the name to agree, so a guessed id cannot open a claim for the wrong person
@@ -188,17 +207,17 @@ def open_claim(customer_id: str, customer_name: str, kind: str, description: str
     cid = "CL-" + uuid.uuid4().hex[:6].upper()
     run("INSERT INTO claims (id, customer_id, opened, status, kind, amount_ils, description) "
         "VALUES (%s,%s,%s,'open',%s,%s,%s);",
-        (cid, customer_id, date.today().isoformat(), kind, int(amount_ils), description), fetch=False)
+        (cid, customer_id, date.today().isoformat(), kind, int(amount_ils), description), fetch=False, role="writer")
     return {"claim_id": cid, "customer": clean(rows[0][0]), "status": "open"}
 
 
 def set_claim_status(claim_id: str, status: str) -> dict:
     if status not in ("open", "in_review", "approved", "rejected", "paid"):
         return {"error": "status must be one of open, in_review, approved, rejected, paid"}
-    _, rows = run("SELECT id FROM claims WHERE id = %s;", (claim_id,))
+    _, rows = run("SELECT id FROM claims WHERE id = %s;", (claim_id,), role="reader")
     if not rows:
         return {"error": f"no claim with id {claim_id}"}
-    run("UPDATE claims SET status = %s WHERE id = %s;", (status, claim_id), fetch=False)
+    run("UPDATE claims SET status = %s WHERE id = %s;", (status, claim_id), fetch=False, role="writer")
     return {"claim_id": claim_id, "status": status}
 
 
@@ -273,16 +292,103 @@ def _write_allowed(name: str, args: dict, writes: str) -> str:
             "and say that nothing was changed.")
 
 
+# ───────────────────────────── figure check ─────────────────────────────
+# A model that skips a search still writes a confident number (it gave 800 for a deductible the
+# handbook puts at 400). So before an answer goes out, every amount in it must be found in what
+# the tools returned in this conversation or in the user's own words, or follow from two such
+# numbers as their sum, or be the double of one (the handbook doubles a deductible). If one is not, the model is told which,
+# and to look it up; after FIGURE_RETRIES such rounds the answer goes out with the figure named
+# as unconfirmed. Identifiers, dates and phone numbers (digits joined by "-") and numbers below
+# FIGURE_MIN (counts, days) are not checked.
+FIGURE_MIN = 100
+FIGURE_RETRIES = 2
+_ANSWER_FIGURE = re.compile(r"(?<![\w.-])\d[\d,]*(?:\.\d+)?(?![\w-]|\.\d)")
+_ANY_NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _num(tok: str):
+    try:
+        return float(tok.replace(",", "").rstrip("."))
+    except ValueError:
+        return None
+
+
+def _evidence_numbers(messages: list[dict]) -> set:
+    """Every number the tools returned or the user wrote (not the system text, not the model's own turns)."""
+    out = set()
+    for m in messages:
+        if m.get("role") in ("tool", "user"):
+            out.update(v for v in (_num(t) for t in _ANY_NUMBER.findall(str(m.get("content") or ""))) if v is not None)
+    return out
+
+
+def unsupported_figures(text: str, evidence: set) -> list[str]:
+    """The amounts in ``text`` that neither appear in ``evidence`` nor follow from it."""
+    big = [e for e in evidence if e >= 1]
+    derived = set(evidence) | {e * 2 for e in big}
+    bad = []
+    for tok in _ANSWER_FIGURE.findall(text):
+        v = _num(tok)
+        if v is None or v < FIGURE_MIN or v in derived:
+            continue
+        if len(big) <= 400 and any((v - a) in evidence for a in big):
+            continue                                   # the sum of two retrieved numbers
+        shown = tok.rstrip(".,")
+        if shown not in bad:
+            bad.append(shown)
+    return bad
+
+
+def claims_not_read(messages: list[dict]) -> bool:
+    """The same idea for a statement of absence ("she has no open claims", said without looking):
+    the question is about a claim, a customer was looked up for it, and no query since that
+    question read the claims table. A turn that used a write tool is left alone."""
+    last = max((i for i, m in enumerate(messages) if m.get("role") == "user" and not m.get("_check")), default=-1)
+    if last < 0 or not re.search(r"(?i)\bclaims?\b", str(messages[last].get("content") or "")):
+        return False
+    read = set()
+    for m in messages[last:]:
+        for c in m.get("tool_calls") or []:
+            fn = c.get("function") or {}
+            if fn.get("name") in WRITE_TOOLS:
+                return False
+            if fn.get("name") == "query_database":
+                read.update(t.lower() for t in re.findall(r"(?i)\b(customers|claims)\b", str(fn.get("arguments"))))
+    return "customers" in read and "claims" not in read
+
+
 def answer(messages: list[dict], writes: str = "deny") -> str:
     """writes: 'deny' (read-only), 'confirm' (ask the person at the terminal) or 'allow'."""
-    for _ in range(MAX_TOOL_ROUNDS):
+    figure_rounds, claims_asked = 0, False
+    for _ in range(MAX_TOOL_ROUNDS + FIGURE_RETRIES):
         msg = chat(messages, TOOLS)
         messages.append(msg)
         calls = msg.get("tool_calls") or []
         if not calls:
             text = (msg.get("content") or "").strip()
+            if text and not claims_asked and claims_not_read(messages):
+                claims_asked = True
+                print(f"{DIM}  claims check: the question is about a claim and the claims table was not read; asking the model to read it{OFF}", flush=True)
+                messages.append({"role": "user", "_check": True, "content":
+                                 "Check before answering: the question is about a claim, and you have not read the claims "
+                                 "table. Query claims for this customer (by customer_id) with query_database, then give the "
+                                 "complete answer again, stating each claim that is not paid or rejected with its status."})
+                continue
             if text:
-                return text
+                bad = unsupported_figures(text, _evidence_numbers(messages))
+                if not bad:
+                    return text
+                if figure_rounds >= FIGURE_RETRIES:
+                    return text + "\n\n(Not confirmed by the handbook or the database: " + ", ".join(bad) + ".)"
+                figure_rounds += 1
+                print(f"{DIM}  figure check: {', '.join(bad)} is not in anything retrieved; asking the model to look it up{OFF}", flush=True)
+                messages.append({"role": "user", "_check": True, "content":
+                                 "Check before answering: the figure(s) " + ", ".join(bad) + " in your answer do not appear in "
+                                 "anything the tools returned in this conversation. Do not state a figure from memory. Call "
+                                 "search_handbook for the rule that gives the figure (for example \"deductible\" or the limit "
+                                 "in question) or query_database for the data, then give the complete answer again with the "
+                                 "figures exactly as retrieved."})
+                continue
             # some local models now and then return an empty turn instead of a tool call
             messages.pop()
             messages.append({"role": "user", "content": "Go on: call the tools you need, then answer."})
@@ -438,6 +544,26 @@ def check() -> None:
     line("SecretSkyDB proxy", lambda: f"{SSDB['host']}:{SSDB['port']}, " + str(run("SELECT count(*) FROM customers;")[1][0][0]) + " customers, "
          + str(run("SELECT count(*) FROM claims;")[1][0][0]) + " claims")
     line("secret column read", lambda: "phone of C-101 = " + str(clean(run("SELECT phone FROM customers WHERE id = 'C-101';")[1][0][0])))
+    def roles():
+        if ROLES["reader"] is SSDB or ROLES["writer"] is SSDB:
+            raise RuntimeError("no reader / writer users in agent.env: the tools run as the admin user (run vm-setup.sh again)")
+        n = run("SELECT count(*) FROM claims;", role="reader")[1][0][0]
+        try:   # changes nothing even if it were allowed: no claim has this id
+            run("UPDATE claims SET status = 'open' WHERE id = 'no-such-claim';", fetch=False, role="reader")
+        except psycopg2.Error as e:
+            refused = str(e).strip().splitlines()[0][:80]
+        else:
+            raise RuntimeError(f"the reader user {ROLES['reader']['user']} was allowed to run an UPDATE")
+        try:
+            run("CREATE TABLE agent_role_probe (x int);", fetch=False, role="writer")
+        except psycopg2.Error:
+            pass
+        else:
+            run("DROP TABLE agent_role_probe;", fetch=False)
+            raise RuntimeError(f"the writer user {ROLES['writer']['user']} was allowed to run DDL")
+        return (f"reads as {ROLES['reader']['user']} ({n} claims visible, UPDATE refused: {refused}); "
+                f"writes as {ROLES['writer']['user']} (DDL refused)")
+    line("least privilege", roles)
     line("model server", lambda: ", ".join(m["name"] for m in requests.get(f"{OLLAMA}/api/tags", timeout=10).json()["models"]))
 
     def where():

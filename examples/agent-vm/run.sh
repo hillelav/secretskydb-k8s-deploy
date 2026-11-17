@@ -111,7 +111,8 @@ cmd_up(){
   if [ -z "$st" ]; then
     # a zone can be out of capacity for a machine type (common for GPUs): try its neighbours
     local region="${ZONE%-*}" z made=""
-    for z in "$ZONE" "$region-a" "$region-b" "$region-c" "$region-f"; do
+    local others; others="$("${GC[@]}" zones list --filter="region:$region AND status:UP" --format='value(name)' 2>/dev/null | sort | tr '\n' ' ')"
+    for z in "$ZONE" $others; do
       [ "$z" = "$ZONE" ] && [ -n "$made" ] && continue
       step "creating VM $VM in $z"
       if "${GC[@]}" instances create "$VM" --zone "$z" --machine-type "$MACHINE" \
@@ -125,7 +126,7 @@ cmd_up(){
       echo "  no capacity for $MACHINE in $z"
       made=0
     done
-    [ "$made" = 1 ] || die "no zone of $region has capacity for $MACHINE right now. Try another region: ZONE=us-east4-a ./run.sh up"
+    [ "$made" = 1 ] || die "no zone of $region has capacity for $MACHINE right now. Try another region, for example: ZONE=us-west1-a ./run.sh up"
     echo "$ZONE" > "$ZONE_FILE"
   elif [ "$st" != "RUNNING" ]; then
     step "starting VM $VM"

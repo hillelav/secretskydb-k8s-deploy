@@ -7,7 +7,8 @@
 # what is already in place.
 #
 #   1. single-node Kubernetes (k3s) and Helm
-#   2. SecretSkyDB from the chart, with the reporting key of the Marketplace order
+#   2. SecretSkyDB from the chart, with the reporting key of the Marketplace order, and two
+#      proxy users for the agent: a reader (SELECT only) and a writer (no DDL)
 #   3. Ollama with the chat model and the embedding model
 #   4. the agent's Python environment and its connection settings
 #   5. sample data loaded through SecretSkyDB, then an end-to-end check
@@ -49,12 +50,38 @@ if ! command -v helm >/dev/null; then
 fi
 
 step "2/5 SecretSkyDB"
+# The agent's own users. The proxy reads them from a Secret (chart value users.existingSecret):
+# SCRAM verifiers only; the passwords stay in a file only this account can read.
+USERS_SECRET="$RELEASE-agent-users"
+USERS_ENV="$ROOT/agent-users.env"
+USERS_CHANGED=""
+kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$NAMESPACE" >/dev/null
+if [ ! -s "$USERS_ENV" ] || ! kubectl -n "$NAMESPACE" get secret "$USERS_SECRET" >/dev/null 2>&1; then
+  ( umask 077; USERS_ENV="$USERS_ENV" python3 "$HERE/agent-users.py" > "$ROOT/users.json" )
+  kubectl -n "$NAMESPACE" create secret generic "$USERS_SECRET" --from-file=users.json="$ROOT/users.json" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  rm -f "$ROOT/users.json"
+  USERS_CHANGED=1
+fi
+printf 'users:\n  existingSecret: %s\n' "$USERS_SECRET" > "$ROOT/users-values.yaml"
+
 KEY="$ROOT/service-account-key.yaml"
 if kubectl -n "$NAMESPACE" get statefulset "$RELEASE" >/dev/null 2>&1 && [ ! -s "$KEY" ]; then
-  echo "already installed"
+  if kubectl -n "$NAMESPACE" get statefulset "$RELEASE" -o jsonpath='{.spec.template.spec.containers[*].env[*].name}' | grep -q SSDB_USERS_FILE; then
+    echo "already installed"
+    if [ -n "$USERS_CHANGED" ]; then      # new passwords: the proxy reads the users file at start
+      kubectl -n "$NAMESPACE" rollout restart statefulset "$RELEASE" >/dev/null
+      kubectl -n "$NAMESPACE" rollout status statefulset "$RELEASE" --timeout=10m >/dev/null
+    fi
+  else
+    echo "already installed; adding the agent's users (the proxy restarts once)"
+    helm -n "$NAMESPACE" upgrade "$RELEASE" "$ROOT/chart/secretskydb" --reuse-values \
+      --set "users.existingSecret=$USERS_SECRET" --wait --timeout 15m >/dev/null
+  fi
 else
   [ -s "$KEY" ] || die "reporting key missing at $KEY"
-  KEY_FILE="$KEY" AUTO_APPROVE=true NAMESPACE="$NAMESPACE" RELEASE="$RELEASE" bash "$ROOT/scripts/install-onprem.sh"
+  KEY_FILE="$KEY" VALUES="$ROOT/users-values.yaml" AUTO_APPROVE=true NAMESPACE="$NAMESPACE" RELEASE="$RELEASE" \
+    bash "$ROOT/scripts/install-onprem.sh"
   # the key now lives in the cluster as a Secret; do not keep a second copy in the home directory
   shred -u "$KEY" 2>/dev/null || rm -f "$KEY"
 fi
@@ -95,6 +122,7 @@ OLLAMA_URL=http://127.0.0.1:11434
 MODEL=$MODEL
 EMBED_MODEL=$EMBED_MODEL
 EOF
+cat "$USERS_ENV" >> "$ROOT/agent.env"     # the reader and writer users of the agent's tools
 
 step "5/5 sample data and end-to-end check"
 "$ROOT/venv/bin/python" "$HERE/agent.py" seed
