@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DiamondClaw Installer Selector</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: numbered choices in one column on the left, the result (summary + command) pinned on the right. */
+:root{
+  --bg:#f3f5f7; --panel:#ffffff; --ink:#15232e; --muted:#5b6b78; --line:#d5dde4;
+  --accent:#0f6b6e; --accent-soft:#e2f1f0; --on-accent:#ffffff;
+  --good:#1f7a3d; --warn:#a15c00; --bad:#b3261e; --code-bg:#10202b; --code-ink:#e6eef3;
+  --font-display:"IBM Plex Sans Condensed","Arial Narrow",Arial,sans-serif;
+  --font-body:"IBM Plex Sans","Segoe UI",Helvetica,Arial,sans-serif;
+  --font-mono:"IBM Plex Mono",Consolas,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0f181f; --panel:#17232c; --ink:#e7eef2; --muted:#9db0bd; --line:#2c3c48;
+    --accent:#4fc1c0; --accent-soft:#16393b; --on-accent:#06201f;
+    --good:#6fd08c; --warn:#f0b35a; --bad:#ff8a80; --code-bg:#0a1218; --code-ink:#dfe9ef;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0f181f; --panel:#17232c; --ink:#e7eef2; --muted:#9db0bd; --line:#2c3c48;
+  --accent:#4fc1c0; --accent-soft:#16393b; --on-accent:#06201f;
+  --good:#6fd08c; --warn:#f0b35a; --bad:#ff8a80; --code-bg:#0a1218; --code-ink:#dfe9ef;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:15px;line-height:1.45}
+.wrap{max-width:1180px;margin:0 auto;padding:20px 16px 48px;display:flex;flex-direction:column;gap:16px}
+header h1{font-family:var(--font-display);font-size:30px;line-height:1.1;margin:0;text-wrap:balance}
+header p{margin:6px 0 0;color:var(--muted);max-width:68ch}
+
+/* narration bar */
+.voicebar{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:10px;position:sticky;top:8px;z-index:5}
+.voicebar .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.caption{min-height:2.9em;color:var(--ink);font-size:15px;border-left:3px solid var(--accent);padding-left:10px}
+.caption.idle{color:var(--muted)}
+button{font:inherit;cursor:pointer}
+.btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:8px;padding:7px 12px;font-weight:500}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent)}
+.btn:focus-visible,.opt:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.voicenote{color:var(--muted);font-size:13px}
+
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px;align-items:start}
+@media (max-width:900px){.grid{grid-template-columns:1fr}.voicebar{position:static}}
+.steps{display:flex;flex-direction:column;gap:14px}
+.step{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}
+.step.speaking{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.step-head{display:flex;gap:10px;align-items:baseline;justify-content:space-between;flex-wrap:wrap}
+.step-head h2{font-family:var(--font-display);font-size:20px;margin:0}
+.step-head .num{color:var(--accent);margin-right:6px}
+.step-help{color:var(--muted);margin:0;max-width:70ch}
+.opts{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px}
+.opt{text-align:left;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:8px;padding:10px 11px;display:flex;flex-direction:column;gap:4px;min-height:92px}
+.opt:hover:not(:disabled){border-color:var(--accent)}
+.opt[aria-checked="true"]{border-color:var(--accent);background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
+.opt:disabled{opacity:.55;cursor:not-allowed}
+.opt .name{font-weight:600}
+.opt .desc{color:var(--muted);font-size:13px}
+.chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:auto}
+.chip{font-size:11.5px;border-radius:999px;padding:1px 8px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.chip.good{color:var(--good);border-color:var(--good)}
+.chip.warn{color:var(--warn);border-color:var(--warn)}
+.chip.bad{color:var(--bad);border-color:var(--bad)}
+.switches{display:flex;flex-direction:column;gap:8px}
+.switch{display:flex;gap:10px;align-items:flex-start}
+.switch input{margin-top:4px;width:17px;height:17px;accent-color:var(--accent)}
+.switch small{display:block;color:var(--muted)}
+.field{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.field input[type=text]{font:inherit;font-family:var(--font-mono);padding:6px 9px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);width:210px}
+
+/* result */
+.result{position:sticky;top:150px;display:flex;flex-direction:column;gap:12px}
+@media (max-width:900px){.result{position:static}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:10px}
+.card h2{font-family:var(--font-display);font-size:20px;margin:0}
+dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 12px}
+dt{color:var(--muted)}
+dd{margin:0;font-weight:500}
+pre{margin:0;background:var(--code-bg);color:var(--code-ink);border-radius:8px;padding:12px;font-family:var(--font-mono);font-size:13px;line-height:1.5;overflow-x:auto;white-space:pre}
+.notes{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+.notes li{font-size:13.5px;padding-left:10px;border-left:3px solid var(--line)}
+.notes li.warn{border-color:var(--warn)}
+.notes li.bad{border-color:var(--bad)}
+.notes li.good{border-color:var(--good)}
+.fine{color:var(--muted);font-size:12.5px;margin:0}
+@media (prefers-reduced-motion: reduce){*{scroll-behavior:auto!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>DiamondClaw installer: choose, then run one command</h1>
+    <p>Six choices, each with a default, produce one command that installs an agent, a local model and the connection to SecretSkyDB on your own hardware: the SecretSkyDB MCP server on this machine, or the endpoint your cluster already runs. Press Play tour to hear it explained.</p>
+  </header>
+
+  <section class="voicebar" aria-label="Narration">
+    <div class="row">
+      <button class="btn primary" id="btnPlay" type="button">Play tour</button>
+      <button class="btn" id="btnNext" type="button">Next step</button>
+      <button class="btn" id="btnStop" type="button">Stop</button>
+      <button class="btn" id="btnVoice" type="button" aria-pressed="true">Voice on</button>
+      <span class="voicenote" id="voiceNote"></span>
+    </div>
+    <div class="caption idle" id="caption" aria-live="polite">The narration text appears here, so the tour also works with the sound off.</div>
+  </section>
+
+  <div class="grid">
+    <div class="steps" id="steps"></div>
+
+    <aside class="result">
+      <div class="card">
+        <h2>Your installation</h2>
+        <dl id="summary"></dl>
+      </div>
+      <div class="card">
+        <h2>Command</h2>
+        <pre id="cmd"></pre>
+        <div class="row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn primary" id="btnCopy" type="button">Copy command</button>
+          <span class="voicenote" id="copyNote"></span>
+        </div>
+        <p class="fine">Run it with diamondclaw-install.sh on the target machine. The script reads these flags and implements one combination so far; see the checks below.</p>
+      </div>
+      <div class="card">
+        <h2>Check before installing</h2>
+        <ul class="notes" id="notes"></ul>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+/* ---------------- data ---------------- */
+const CUSTOMERS = [
+  {id:'us-gov', name:'US government or defence', desc:'Only American and European models are offered.'},
+  {id:'eu',     name:'EU public sector',         desc:'European model by default; American models also offered.'},
+  {id:'other',  name:'Israel and commercial',    desc:'All models on the menu are offered.'}
+];
+const AGENTS = [
+  {id:'nemoclaw', name:'NemoClaw', desc:'OpenClaw inside NVIDIA’s sandbox. The safer choice for sensitive sites.', chips:[['Apache 2.0',''],['Needs Docker','']], openclaw:true, sandbox:'NVIDIA OpenShell (built in)'},
+  {id:'openclaw', name:'OpenClaw', desc:'Largest ecosystem of channels and skills. Weak isolation on its own.', chips:[['MIT','']], openclaw:true, sandbox:'Hardened container (added by the installer)'},
+  {id:'hermes',   name:'Hermes Agent', desc:'Nous Research. Smaller ecosystem, cleaner security record.', chips:[['MIT',''],['Installs today','good']], openclaw:false, sandbox:'None yet (run on a dedicated machine)'},
+  {id:'lowcode',  name:'Dify or n8n', desc:'Low-code flows and web chat, for IT teams that want to edit the flow themselves.', chips:[['Open source','']], openclaw:false, sandbox:'Container'},
+  {id:'sdk-app',  name:'Agent SDK app', desc:'A small application with one channel adapter. Fewest moving parts; suits government and hospital appliances.', chips:[['Few parts','']], openclaw:false, sandbox:'Hardened container (added by the installer)'}
+];
+const HARDWARE = [
+  {id:'cpu',     tier:0, name:'Laptop or CPU server', desc:'16 GB of memory, no GPU needed.'},
+  {id:'gpu24',   tier:1, name:'One 24 GB GPU', desc:'For example an NVIDIA L4, as in the current demo.'},
+  {id:'big',     tier:2, name:'128 GB Mac or one 80 GB GPU', desc:'For example one H100.'},
+  {id:'cluster', tier:3, name:'GPU cluster', desc:'About eight H200-class GPUs.'}
+];
+/* us: 'ok' = no origin bar known; 'avoid' = Chinese origin, not offered to US government */
+const INSTALLABLE_MODELS = ['gpt-oss-20b','gpt-oss-120b','qwen2.5-14b'];
+function installable(){ return state.agent==='hermes' && state.connect==='mcp' && state.hw!=='cluster' && !state.airgap && !state.guardrails && INSTALLABLE_MODELS.includes(state.model); }
+const MODELS = [
+  {id:'gpt-oss-20b',  name:'gpt-oss-20b',  maker:'OpenAI (US)',   lic:'Apache 2.0', mem:'14 GB weights, about 24 GB with the 64K context Hermes needs', min:1, us:'ok',    tested:false},
+  {id:'gemma4-e4b',   name:'Gemma 4 E4B',  maker:'Google (US)',   lic:'Apache 2.0', mem:'about 6 GB',  min:0, us:'ok',    tested:false},
+  {id:'gemma4-31b',   name:'Gemma 4 31B',  maker:'Google (US)',   lic:'Apache 2.0', mem:'about 20 GB', min:1, us:'ok',    tested:false},
+  {id:'qwen2.5-14b',  name:'Qwen 2.5 14B', maker:'Alibaba (China)', lic:'Apache 2.0', mem:'9 GB',      min:1, us:'avoid', tested:true},
+  {id:'nemotron-3.5-bolt', name:'Nemotron 3.5 Bolt', maker:'NVIDIA (US)', lic:'licence to check', licWarn:true, mem:'fits 24 GB', min:1, us:'ok', tested:false},
+  {id:'gpt-oss-120b', name:'gpt-oss-120b', maker:'OpenAI (US)',   lic:'Apache 2.0', mem:'61 GB',       min:2, us:'ok',    tested:false},
+  {id:'mistral-small-4', name:'Mistral Small 4', maker:'Mistral (France)', lic:'Apache 2.0', mem:'60 GB', min:2, us:'ok', tested:false},
+  {id:'mistral-large-4', name:'Mistral Large 4', maker:'Mistral (France)', lic:'custom licence: read first', licWarn:true, mem:'610 GB build', min:3, us:'ok', tested:false},
+  {id:'inkling',      name:'Inkling',      maker:'Thinking Machines (US)', lic:'Apache 2.0', mem:'cluster', min:3, us:'ok', tested:false},
+  {id:'beam-1',       name:'Beam 1.0',     maker:'Reflection AI (US)',     lic:'Apache 2.0', mem:'cluster', min:3, us:'ok', tested:false}
+];
+const DEFAULT_MODEL = {
+  'us-gov':['gemma4-e4b','gpt-oss-20b','gpt-oss-120b','gpt-oss-120b'],
+  'eu':    ['gemma4-e4b','gemma4-31b','mistral-small-4','mistral-small-4'],
+  'other': ['gemma4-e4b','gpt-oss-20b','gpt-oss-120b','gpt-oss-120b']
+};
+const CONNECT = [
+  {id:'mcp',   name:'MCP server', desc:'Recommended. Every agent can use it: describe, lookup, aggregate, search, write and unit_of_work, with per-agent identity and an audit trail. Local over stdio, or the endpoint the cluster runs (0.5).', chips:[['Recommended','good'],['Installs today','good']]},
+  {id:'skill', name:'OpenClaw skill', desc:'Quickest to build, but works with OpenClaw and NemoClaw only.', chips:[['OpenClaw only',''],['To be built','warn']], needsOpenclaw:true},
+  {id:'http',  name:'Our own HTTP API', desc:'For sites that do not allow MCP. Same tools behind a plain web interface.', chips:[['On request',''],['To be built','warn']]}
+];
+
+const state = {customer:'us-gov', agent:'hermes', hw:'big', model:'gpt-oss-120b', connect:'mcp', airgap:false, guardrails:false, ssdb:'127.0.0.1:55432', mcpUrl:''};
+
+/* ---------------- narration text: cap = shown, say = spoken ---------------- */
+const TOUR = [
+  {step:null, cap:'This is the DiamondClaw installer. Six choices, each with a sensible default, produce one command. That command installs an agent, a local model, and the connection to SecretSkyDB on your own hardware.',
+              say:'This is the Diamond Claw installer. Six choices, each with a sensible default, produce one command. That command installs an agent, a local model, and the connection to Secret Sky D B, on your own hardware.'},
+  {step:'customer', cap:'First, who is the customer. This choice filters the models. For United States government and defence work, only American and European models are offered.',
+              say:'First, who is the customer. This choice filters the models. For United States government and defence work, only American and European models are offered.'},
+  {step:'agent', cap:'Second, the agent. NemoClaw is OpenClaw inside NVIDIA’s sandbox, and is the safer choice for sensitive sites. OpenClaw alone has the largest ecosystem. Hermes Agent is a smaller alternative. Dify and n8n suit teams that edit flows without code. A small Agent SDK app has the fewest moving parts. Today the installer script implements Hermes Agent.',
+              say:'Second, the agent. Nemo Claw is Open Claw inside N-vidia’s sandbox, and is the safer choice for sensitive sites. Open Claw alone has the largest ecosystem. Hermes Agent is a smaller alternative. Diffy and N eight N suit teams that edit flows without code. A small agent S D K app has the fewest moving parts. Today the installer script implements Hermes Agent.'},
+  {step:'hw', cap:'Third, the hardware. The installer only offers models that fit the memory you have.',
+              say:'Third, the hardware. The installer only offers models that fit the memory you have.'},
+  {step:'model', cap:'Fourth, the model. For American buyers the default is gpt-oss-120b from OpenAI. For European tenders it is Mistral Small 4. Both need a 128 GB Mac or one 80 GB GPU. On a single 24 GB GPU, Gemma 4 fits. So does Qwen 2.5, the model the demo runs today, which is not offered to United States government customers.',
+              say:'Fourth, the model. For American buyers the default is G P T O S S one twenty B, from Open A I. For European tenders it is Mistral Small four. Both need a one hundred twenty eight gigabyte Mac, or one eighty gigabyte G P U. On a single twenty four gigabyte G P U, Gemma four fits. So does Chwen two point five, the model the demo runs today, which is not offered to United States government customers.'},
+  {step:'connect', cap:'Fifth, how the agent reaches SecretSkyDB. The MCP server is the recommended door: every agent can use it, and a basic read-only version installs today. An OpenClaw skill is quicker to build but works with OpenClaw only. Our own HTTP interface is for sites that do not allow MCP.',
+              say:'Fifth, how the agent reaches Secret Sky D B. The M C P server is the recommended door. Every agent can use it, and a basic read only version installs today. An Open Claw skill is quicker to build, but works with Open Claw only. Our own H T T P interface is for sites that do not allow M C P.'},
+  {step:'options', cap:'Last, two switches and one address. Air-gapped installs from an offline bundle with no downloads. Guardrails screen messages when the agent faces the public. The address tells the installer where the SecretSkyDB proxy listens.',
+              say:'Last, two switches and one address. Air gapped installs from an offline bundle, with no downloads. Guardrails screen messages when the agent faces the public. The address tells the installer where the Secret Sky D B proxy listens.'},
+  {step:'result', dynamic:true}
+];
+
+/* ---------------- rendering ---------------- */
+const $ = id => document.getElementById(id);
+const byId = (arr,id) => arr.find(x => x.id === id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const tier = () => byId(HARDWARE, state.hw).tier;
+
+function modelAllowed(m){
+  if(m.min > tier()) return {ok:false, why:'Needs more memory'};
+  if(state.customer === 'us-gov' && m.us === 'avoid') return {ok:false, why:'Not offered to US government'};
+  return {ok:true};
+}
+function fixSelections(){
+  const m = byId(MODELS, state.model);
+  if(!modelAllowed(m).ok) state.model = DEFAULT_MODEL[state.customer][tier()];
+  if(state.connect === 'skill' && !byId(AGENTS, state.agent).openclaw) state.connect = 'mcp';
+}
+function chip(text, kind){ return '<span class="chip '+(kind||'')+'">'+esc(text)+'</span>'; }
+
+function optButton(group, o, checked, disabled, chipsHtml, why){
+  return '<button type="button" class="opt" role="radio" data-group="'+group+'" data-id="'+esc(o.id)+'" aria-checked="'+checked+'"'+(disabled?' disabled':'')+'>'
+    + '<span class="name">'+esc(o.name)+'</span>'
+    + '<span class="desc">'+esc(disabled && why ? why : (o.desc||''))+'</span>'
+    + '<span class="chips">'+(chipsHtml||'')+'</span></button>';
+}
+function stepBox(key, n, title, help, inner){
+  return '<section class="step" id="step-'+key+'" data-step="'+key+'">'
+    + '<div class="step-head"><h2><span class="num">'+n+'</span>'+esc(title)+'</h2>'
+    + '<button type="button" class="btn" data-explain="'+key+'">Explain</button></div>'
+    + '<p class="step-help">'+esc(help)+'</p>'+inner+'</section>';
+}
+
+function render(){
+  fixSelections();
+  const defModel = DEFAULT_MODEL[state.customer][tier()];
+  let h = '';
+  h += stepBox('customer',1,'Customer','Decides which models may be offered.',
+    '<div class="opts" role="radiogroup" aria-label="Customer">'+CUSTOMERS.map(o => optButton('customer',o,state.customer===o.id,false,'')).join('')+'</div>');
+  h += stepBox('agent',2,'Agent','The software that talks to people, remembers, schedules work and calls tools.',
+    '<div class="opts" role="radiogroup" aria-label="Agent">'+AGENTS.map(o => optButton('agent',o,state.agent===o.id,false,
+      o.chips.map(c => chip(c[0],c[1])).join(''))).join('')+'</div>');
+  h += stepBox('hw',3,'Hardware','The machine the model will run on.',
+    '<div class="opts" role="radiogroup" aria-label="Hardware">'+HARDWARE.map(o => optButton('hw',o,state.hw===o.id,false,'')).join('')+'</div>');
+  h += stepBox('model',4,'Model','Runs on your hardware. Prompts and answers stay on site.',
+    '<div class="opts" role="radiogroup" aria-label="Model">'+MODELS.map(m => {
+      const a = modelAllowed(m);
+      const chips = chip(m.lic, m.licWarn ? 'warn' : '') + chip(m.mem,'')
+        + (m.us==='avoid' ? chip('Chinese origin','bad') : '')
+        + (m.tested ? chip('Demo passes 11 of 11','good') : chip('Not yet tested','warn'))
+        + (INSTALLABLE_MODELS.includes(m.id) ? chip('Installs today','good') : '')
+        + (m.id===defModel && a.ok ? chip('Default','good') : '');
+      return optButton('model',{id:m.id,name:m.name,desc:m.maker},state.model===m.id,!a.ok,chips,m.maker+'. '+(a.why||''));
+    }).join('')+'</div>');
+  h += stepBox('connect',5,'Connection to SecretSkyDB','How the agent calls the data. In every case the proxy enforces roles, grants and audit.',
+    '<div class="opts" role="radiogroup" aria-label="Connection">'+CONNECT.map(o => {
+      const dis = !!o.needsOpenclaw && !byId(AGENTS,state.agent).openclaw;
+      return optButton('connect',o,state.connect===o.id,dis,o.chips.map(c => chip(c[0],c[1])).join(''),'Available with OpenClaw or NemoClaw only.');
+    }).join('')+'</div>');
+  h += stepBox('options',6,'Site options','Two switches and the address of the SecretSkyDB proxy.',
+    '<div class="switches">'
+    + '<label class="switch" for="swAirgap"><input type="checkbox" id="swAirgap"'+(state.airgap?' checked':'')+'><span><strong>Air-gapped site</strong><small>Install from an offline bundle. Nothing is downloaded during installation.</small></span></label>'
+    + '<label class="switch" for="swGuard"><input type="checkbox" id="swGuard"'+(state.guardrails?' checked':'')+'><span><strong>Guardrails for public channels</strong><small>Screens incoming and outgoing messages. Not needed for internal use only.</small></span></label>'
+    + '<div class="field"><label for="inSsdb"><strong>SecretSkyDB proxy address</strong></label><input type="text" id="inSsdb" value="'+esc(state.ssdb)+'" spellcheck="false" autocomplete="off"></div>'
+    + '<div class="field"><label for="inMcp"><strong>Cluster MCP endpoint</strong> (optional; leave empty to run the server on this machine)</label><input type="text" id="inMcp" value="'+esc(state.mcpUrl)+'" placeholder="https://ssdb.example.com:55440/mcp" spellcheck="false" autocomplete="off" style="width:320px"></div>'
+    + '</div>');
+  $('steps').innerHTML = h;
+  if(speakingStep) markSpeaking(speakingStep);
+  renderResult();
+}
+
+function serving(){ return state.hw === 'cluster' ? 'vLLM' : 'Ollama'; }
+
+function renderResult(){
+  const ag = byId(AGENTS,state.agent), m = byId(MODELS,state.model), hw = byId(HARDWARE,state.hw), c = byId(CONNECT,state.connect), cu = byId(CUSTOMERS,state.customer);
+  const rows = [['Customer',cu.name],['Agent',ag.name],['Sandbox',ag.sandbox],['Hardware',hw.name],['Model',m.name+' ('+m.maker+')'],
+    ['Model serving',serving()+(state.hw==='cluster'?' (fleet)':' (one machine)')],['Connection',c.name],['Guardrails',state.guardrails?'NeMo Guardrails':'None (internal use)'],
+    ['Network',state.airgap?'Air-gapped, offline bundle':'Downloads from publishers'],['SecretSkyDB',state.ssdb||'not set']];
+  $('summary').innerHTML = rows.map(r => '<dt>'+esc(r[0])+'</dt><dd>'+esc(r[1])+'</dd>').join('');
+
+  const safeAddr = /^[A-Za-z0-9_.\-\[\]:]+$/.test(state.ssdb) ? state.ssdb : '127.0.0.1:55432';
+  const remote = /^https:\/\/[A-Za-z0-9_.\-:\/]+$/.test(state.mcpUrl) ? state.mcpUrl : '';
+  const lines = [(remote ? 'SSDB_MCP_TOKEN=your-agent-token' : 'SSDB_PASSWORD=your-password')+' ./diamondclaw-install.sh','  --customer '+state.customer,'  --agent '+state.agent,'  --model '+state.model,'  --serving '+serving().toLowerCase(),'  --connect '+state.connect];
+  if(remote) lines.push('  --mcp-url '+remote); else { lines.push('  --ssdb '+safeAddr); lines.push('  --db postgres --user agent_reader'); }
+  lines.push('  --agent-id '+(state.agent)+'-1 --yes');
+  if(state.guardrails) lines.push('  --guardrails nemo');
+  if(state.airgap) lines.push('  --air-gapped --bundle ./diamondclaw-bundle.tar');
+  $('cmd').textContent = lines.join(' \\\n');
+
+  const notes = [];
+  if(state.customer==='us-gov') notes.push(['good','Only American and European models are selectable. This reflects published rules as of November 2026 and is not legal advice.']);
+  if(m.us==='avoid') notes.push(['warn','Chinese-origin model. Fine for a demo; do not propose it to a US federal or defence customer.']);
+  if(m.licWarn) notes.push(['warn','Read the licence of '+m.name+' before offering it to a customer.']);
+  if(!m.tested) notes.push(['warn',m.name+' has not yet been run through our eleven test cases. Test it before promising it.']);
+  if(state.agent==='openclaw') notes.push(['warn','OpenClaw alone has weak isolation. For a sensitive site choose NemoClaw.']);
+  if(state.agent==='nemoclaw') notes.push(['','NemoClaw needs Docker on the target machine and is still marked alpha by NVIDIA.']);
+  if(installable()) notes.unshift(['good','This combination installs end to end with diamondclaw-install.sh. Replace your-password, and use a read-only proxy user.']);
+  else notes.unshift(['bad','The installer script does not implement this combination yet and will stop with a message. Implemented today: Hermes Agent, a gpt-oss model (or Qwen 2.5 for non-US customers) on Ollama, MCP server, no air gap, no guardrails.']);
+  if(state.connect==='mcp' && !remote) notes.push(['','The MCP server runs on this machine over stdio as the proxy user you name; its role and table grants decide what the agent may read or change. Writes are previewed, confirmed with a token and recorded first. For the audit table add --audit-user / --audit-password.']);
+  if(state.connect==='mcp' && remote) notes.push(['good','The cluster runs the MCP server (chart mcp.enabled). This machine gets only the agent and the model; the token names the proxy user and is what the audit trail records.']);
+  if(state.mcpUrl && !remote) notes.push(['bad','The MCP endpoint must be an https:// URL; the command ignores it.']);
+  else notes.push(['warn','The '+c.name+' connection is not built yet.']);
+  if(state.airgap) notes.push(['','Air-gapped: prepare the offline bundle on a connected machine first. Model weights are tens of gigabytes; verify checksums before loading.']);
+  if(state.hw==='cluster') notes.push(['','A cluster uses vLLM for serving. An eight-GPU H200 server costs roughly USD 320,000 to 420,000.']);
+  if(safeAddr !== state.ssdb) notes.push(['bad','The proxy address contains characters that are not allowed. The command uses the default address.']);
+  $('notes').innerHTML = notes.map(n => '<li class="'+n[0]+'">'+esc(n[1])+'</li>').join('');
+}
+
+/* ---------------- events ---------------- */
+$('steps').addEventListener('click', e => {
+  const ex = e.target.closest('[data-explain]');
+  if(ex){ const i = TOUR.findIndex(t => t.step === ex.dataset.explain); if(i >= 0) playFrom(i, false); return; }
+  const b = e.target.closest('.opt');
+  if(!b || b.disabled) return;
+  state[b.dataset.group] = b.dataset.id;
+  const keep = b.dataset.group, id = b.dataset.id;
+  render();
+  const again = document.querySelector('.opt[data-group="'+keep+'"][data-id="'+CSS.escape(id)+'"]');
+  if(again) again.focus({preventScroll:true});
+});
+$('steps').addEventListener('change', e => {
+  if(e.target.id === 'swAirgap'){ state.airgap = e.target.checked; renderResult(); }
+  if(e.target.id === 'swGuard'){ state.guardrails = e.target.checked; renderResult(); }
+});
+$('steps').addEventListener('input', e => {
+  if(e.target.id === 'inSsdb'){ state.ssdb = e.target.value.trim(); renderResult(); }
+  if(e.target.id === 'inMcp'){ state.mcpUrl = e.target.value.trim(); renderResult(); }
+});
+$('btnCopy').addEventListener('click', () => {
+  const text = $('cmd').textContent;
+  const done = ok => { $('copyNote').textContent = ok ? 'Copied.' : 'Select the text and copy it by hand.'; };
+  try { navigator.clipboard.writeText(text).then(() => done(true), () => done(false)); } catch(_) { done(false); }
+});
+
+/* ---------------- narration (Web Speech API, female English voice) ---------------- */
+const synth = window.speechSynthesis || null;
+const VOICE_PREFS = [
+  /^(Ava|Zoe|Allison|Samantha|Nicky|Susan)\b.*(Premium|Enhanced)/i,
+  /^(Ava|Zoe|Allison)\b/i,
+  /^Google US English$/i, /^Google UK English Female$/i,
+  /^Microsoft (Aria|Jenny|Sonia|Libby|Ava|Emma).*Natural/i,
+  /^Samantha\b/i, /^Karen\b/i, /^Moira\b/i, /^Kathy\b/i, /^Microsoft Zira/i, /female/i
+];
+function pickVoice(){
+  if(!synth) return null;
+  const voices = synth.getVoices().filter(v => /^en/i.test(v.lang));
+  for(const re of VOICE_PREFS){ const v = voices.find(v => re.test(v.name)); if(v) return v; }
+  return voices.find(v => /^en[-_]US/i.test(v.lang)) || voices[0] || null;
+}
+let voiceOn = true, run = null, speakingStep = null;   // run = {i, auto, parts, p, timer}
+
+function dynamicSummary(){
+  const ag = byId(AGENTS,state.agent), m = byId(MODELS,state.model), hw = byId(HARDWARE,state.hw), c = byId(CONNECT,state.connect);
+  const cap = 'Your installation: '+ag.name+', running '+m.name+' on '+hw.name.toLowerCase()+', connected to SecretSkyDB through the '+c.name+'. Copy the command on the right and run it on the target machine.';
+  const sayNames = {'gpt-oss-120b':'G P T O S S one twenty B','gpt-oss-20b':'G P T O S S twenty B','Qwen 2.5 14B':'Chwen two point five','NemoClaw':'Nemo Claw','OpenClaw':'Open Claw','Dify or n8n':'Diffy or N eight N','MCP server':'M C P server','Our own HTTP API':'H T T P interface','128 GB Mac or one 80 GB GPU':'a one hundred twenty eight gigabyte Mac or one eighty gigabyte G P U','One 24 GB GPU':'one twenty four gigabyte G P U'};
+  const s = x => sayNames[x] || x;
+  const say = 'Your installation: '+s(ag.name)+', running '+s(m.name)+', on '+s(hw.name)+', connected to Secret Sky D B through the '+s(c.name)+'. Copy the command on the right, and run it on the target machine.';
+  return {cap, say};
+}
+function markSpeaking(key){
+  document.querySelectorAll('.step.speaking').forEach(el => el.classList.remove('speaking'));
+  speakingStep = key;
+  if(!key) return;
+  const el = key === 'result' ? document.querySelector('.result .card') : $('step-'+key);
+  if(el){ if(key !== 'result') el.classList.add('speaking'); }
+}
+function scrollToStep(key){
+  const el = key === 'result' ? document.querySelector('.result') : (key ? $('step-'+key) : null);
+  if(el) el.scrollIntoView({behavior:'smooth', block:'center'});
+}
+function setCaption(text){ const c = $('caption'); c.textContent = text; c.classList.remove('idle'); }
+
+function playFrom(i, auto){
+  stop(false);
+  if(i >= TOUR.length){ $('btnPlay').textContent = 'Play tour'; return; }
+  const t = TOUR[i];
+  const txt = t.dynamic ? dynamicSummary() : t;
+  setCaption(txt.cap);
+  markSpeaking(t.step); scrollToStep(t.step);
+  run = {i, auto, parts: txt.say.match(/[^.!?]+[.!?]+|[^.!?]+$/g).map(s => s.trim()).filter(Boolean), p:0, timer:null};
+  $('btnPlay').textContent = 'Restart tour';
+  const mine = run;
+  const advance = () => { if(run !== mine) return; if(mine.auto) mine.timer = setTimeout(() => { if(run === mine) playFrom(mine.i + 1, true); }, 700); else finish(); };
+  if(!synth || !voiceOn){
+    const ms = Math.max(3500, txt.cap.length * 55);       // silent mode: hold the caption long enough to read
+    mine.timer = setTimeout(advance, mine.auto ? ms : 0);
+    return;
+  }
+  const next = () => {
+    if(run !== mine) return;
+    if(mine.p >= mine.parts.length){ advance(); return; }
+    const u = new SpeechSynthesisUtterance(mine.parts[mine.p++]);
+    const v = pickVoice(); if(v){ u.voice = v; u.lang = v.lang; } else { u.lang = 'en-US'; }
+    u.rate = 0.96; u.pitch = 1.0;
+    u.onend = () => { if(run === mine) mine.timer = setTimeout(next, 220); };
+    u.onerror = ev => { if(run !== mine) return; if(ev.error === 'interrupted' || ev.error === 'canceled') return; mine.timer = setTimeout(next, 220); };
+    try { synth.speak(u); } catch(_) { advance(); }
+  };
+  next();
+}
+function finish(){ run = null; $('btnPlay').textContent = 'Play tour'; }
+function stop(clear){
+  if(run && run.timer) clearTimeout(run.timer);
+  run = null;
+  if(synth){ try { synth.cancel(); } catch(_) {} }
+  if(clear !== false){ markSpeaking(null); $('btnPlay').textContent = 'Play tour'; }
+}
+$('btnPlay').addEventListener('click', () => playFrom(0, true));
+$('btnNext').addEventListener('click', () => { const i = run ? run.i + 1 : 0; playFrom(i >= TOUR.length ? 0 : i, run ? run.auto : false); });
+$('btnStop').addEventListener('click', () => stop(true));
+$('btnVoice').addEventListener('click', () => {
+  voiceOn = !voiceOn;
+  $('btnVoice').textContent = voiceOn ? 'Voice on' : 'Voice off';
+  $('btnVoice').setAttribute('aria-pressed', String(voiceOn));
+  if(!voiceOn && synth){ try { synth.cancel(); } catch(_) {} }
+  if(run){ playFrom(run.i, run.auto); }
+});
+function describeVoice(){
+  if(!synth){ $('voiceNote').textContent = 'This browser has no speech; the tour runs with captions only.'; return; }
+  const v = pickVoice();
+  $('voiceNote').textContent = v ? 'Voice: '+v.name : 'Captions shown; voice loads on first play.';
+}
+if(synth){ try { synth.onvoiceschanged = describeVoice; } catch(_) {} }
+
+render();
+describeVoice();
+</script>
+</body>
+</html>
