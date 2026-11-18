@@ -9,6 +9,7 @@
     agent.py ask "..."   one question; read-only unless you add --write
     agent.py chat        interactive; asks before every change to the data
     agent.py test        the question set in CASES, with pass / fail per question
+    agent.py audit [n]   the last n records of the audit trail (default 30)
 
 The model (served by Ollama on this machine) decides which tool to call:
 
@@ -19,9 +20,13 @@ The model (served by Ollama on this machine) decides which tool to call:
     open_claim        INSERT a claim.
     set_claim_status  UPDATE a claim.
 
-Two safeguards that do not depend on the model behaving:
+Safeguards that do not depend on the model behaving:
   * the read tools connect as a proxy user with the role "reader", the write tools as one with the
-    role "writer"; the admin user is used only to load the sample data;
+    role "writer"; the admin user is used only to load the sample data. From SecretSkyDB 0.4.1 the
+    proxy also holds each of them to its tables: the reader may read the three tables, the writer
+    may insert and update claims and nothing else;
+  * every question, tool call, check and answer is recorded in the table agent_audit (see "audit
+    trail"), by a third user that can only add records. A change is recorded before it is made;
   * an amount in an answer must be found in what the tools returned (see "figure check").
 
 The agent speaks the PostgreSQL protocol to the SecretSkyDB proxy; there is no other database.
@@ -32,6 +37,7 @@ Sample data is fictional.
 from __future__ import annotations
 
 import base64
+import getpass
 import json
 import math
 import os
@@ -74,7 +80,7 @@ def _role_user(prefix: str) -> dict:
     return dict(SSDB, user=u, password=pw) if u and pw else SSDB
 
 
-ROLES = {"admin": SSDB, "reader": _role_user("READER"), "writer": _role_user("WRITER")}
+ROLES = {"admin": SSDB, "reader": _role_user("READER"), "writer": _role_user("WRITER"), "audit": _role_user("AUDIT")}
 
 OLLAMA = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 MODEL = os.environ.get("MODEL", "qwen2.5:7b")
@@ -146,6 +152,64 @@ def chat(messages: list[dict], tools: list[dict]) -> dict:
     return r.json()["message"]
 
 
+# ───────────────────────────── audit trail ─────────────────────────────
+# One record per event of a question: the question itself, each tool call with its arguments and
+# outcome, each check that sent the model back, and the answer. Who asked, in which mode, and as
+# which database user each call ran are ordinary columns, so they can be filtered; the text (the
+# question, the arguments, the answer) is one Secret column, stored as shares like the data it is
+# about. The records are added by the user "audit", which from SecretSkyDB 0.4.1 holds INSERT on
+# this table and nothing else: the agent cannot read, change or delete its own trail.
+# A change to the data is recorded BEFORE it is made; if that record cannot be written, the change
+# is not made. For everything else a failed record is reported and the work goes on.
+AUDIT_DDL = ("CREATE TABLE agent_audit (\"_id\" UUID PRIMARY KEY DEFAULT gen_random_uuid(), ts TEXT, session TEXT, "
+             "turn INT, step INT, event TEXT, operator TEXT, mode TEXT, tool TEXT, db_user TEXT, outcome TEXT, "
+             "ms INT, detail TEXT); COMMENT ON COLUMN agent_audit.detail IS 'SSDB: secret';")
+TOOL_ROLE = {"search_handbook": "reader", "query_database": "reader", "open_claim": "writer", "set_claim_status": "writer"}
+
+
+class Audit:
+    def __init__(self) -> None:
+        self.session = uuid.uuid4().hex[:12]
+        self.operator = os.environ.get("AGENT_OPERATOR") or getpass.getuser()
+        self.turn = self.step = self.failed = 0
+        self.mode = "deny"
+
+    def start(self, question: str, mode: str) -> None:
+        self.turn, self.step, self.mode = self.turn + 1, 0, mode
+        self.record("question", detail={"question": question})
+
+    def record(self, event: str, tool: str = "", outcome: str = "ok", ms: float = 0, detail=None) -> bool:
+        """True when the record is stored."""
+        self.step += 1
+        text = json.dumps(detail or {}, ensure_ascii=False, default=str)
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + f".{int(time.time() % 1 * 1000):03d}Z"
+        try:
+            run("INSERT INTO agent_audit (ts, session, turn, step, event, operator, mode, tool, db_user, outcome, ms, detail) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s);",
+                (ts, self.session, self.turn, self.step, event, self.operator, self.mode, tool,
+                 ROLES[TOOL_ROLE[tool]]["user"] if tool in TOOL_ROLE else "", outcome, int(ms), text[:6000]),
+                fetch=False, role="audit")
+            return True
+        except Exception as e:
+            self.failed += 1
+            print(f"{DIM}  audit: record not stored ({str(e).strip().splitlines()[0][:120]}){OFF}", flush=True)
+            return False
+
+
+AUDIT = Audit()
+
+
+def show_audit(n: int = 30) -> None:
+    cols, rows = run("SELECT ts, session, turn, step, event, operator, mode, tool, db_user, outcome, ms, detail "
+                     "FROM agent_audit;")
+    rows = sorted(rows, key=lambda r: (r[0] or "", r[3] or 0))[-n:]
+    for ts, session, turn, step, event, operator, mode, tool, db_user, outcome, ms, detail in rows:
+        what = " ".join(str(clean(detail) or "").split())
+        print(f"{(ts or '')[:19]}  {session} {turn}.{step:<2} {event:<8} {outcome:<8} {mode:<7} {operator:<10} "
+              f"{(tool + ' as ' + db_user) if tool else '':<34} {ms or 0:>6} ms  {what[:160]}")
+    print(f"{len(rows)} record(s) shown; the text column is Secret (stored as shares)")
+
+
 # ───────────────────────────── tools ─────────────────────────────
 def search_handbook(query: str, k: int = 4) -> dict:
     """Two steps, as the proxy's vector queries require: score every passage on the shares
@@ -170,7 +234,7 @@ def query_database(sql: str) -> dict:
     s = sql.strip().rstrip(";").strip()
     if not re.match(r"(?is)^select\b", s) or ";" in s or _FORBIDDEN.search(s):
         return {"error": "only a single SELECT statement is allowed"}
-    if not re.search(r"(?i)\b(customers|claims)\b", s) or re.search(r"(?i)\b(pg_|information_schema|handbook_chunk)", s):
+    if not re.search(r"(?i)\b(customers|claims)\b", s) or re.search(r"(?i)\b(pg_|information_schema|handbook_chunk|agent_audit)", s):
         return {"error": "query the customers and claims tables only"}
     try:
         try:
@@ -360,6 +424,7 @@ def claims_not_read(messages: list[dict]) -> bool:
 def answer(messages: list[dict], writes: str = "deny") -> str:
     """writes: 'deny' (read-only), 'confirm' (ask the person at the terminal) or 'allow'."""
     figure_rounds, claims_asked = 0, False
+    AUDIT.start(next((m["content"] for m in reversed(messages) if m["role"] == "user" and not m.get("_check")), ""), writes)
     for _ in range(MAX_TOOL_ROUNDS + FIGURE_RETRIES):
         msg = chat(messages, TOOLS)
         messages.append(msg)
@@ -368,6 +433,7 @@ def answer(messages: list[dict], writes: str = "deny") -> str:
             text = (msg.get("content") or "").strip()
             if text and not claims_asked and claims_not_read(messages):
                 claims_asked = True
+                AUDIT.record("check", outcome="sent back", detail={"check": "claims table not read", "draft": text})
                 print(f"{DIM}  claims check: the question is about a claim and the claims table was not read; asking the model to read it{OFF}", flush=True)
                 messages.append({"role": "user", "_check": True, "content":
                                  "Check before answering: the question is about a claim, and you have not read the claims "
@@ -377,10 +443,13 @@ def answer(messages: list[dict], writes: str = "deny") -> str:
             if text:
                 bad = unsupported_figures(text, _evidence_numbers(messages))
                 if not bad:
+                    AUDIT.record("answer", detail={"answer": text})
                     return text
                 if figure_rounds >= FIGURE_RETRIES:
+                    AUDIT.record("answer", outcome="unconfirmed", detail={"answer": text, "unconfirmed_figures": bad})
                     return text + "\n\n(Not confirmed by the handbook or the database: " + ", ".join(bad) + ".)"
                 figure_rounds += 1
+                AUDIT.record("check", outcome="sent back", detail={"check": "figure not in anything retrieved", "figures": bad, "draft": text})
                 print(f"{DIM}  figure check: {', '.join(bad)} is not in anything retrieved; asking the model to look it up{OFF}", flush=True)
                 messages.append({"role": "user", "_check": True, "content":
                                  "Check before answering: the figure(s) " + ", ".join(bad) + " in your answer do not appear in "
@@ -404,20 +473,30 @@ def answer(messages: list[dict], writes: str = "deny") -> str:
             shown = json.dumps(args, ensure_ascii=False)
             print(f"{DIM}  → {name} {shown[:200]}{OFF}", flush=True)
             t0 = time.time()
+            outcome = "error"
             try:
                 refused = _write_allowed(name, args, writes) if name in WRITE_TOOLS else ""
                 if refused:
-                    result = {"error": refused}
+                    result, outcome = {"error": refused}, ("declined" if writes == "confirm" else "read-only")
+                elif name in WRITE_TOOLS and not AUDIT.record("tool", name, "attempt", detail={"arguments": args}):
+                    result = {"error": "the change was not made: its audit record could not be written. Tell the user."}
+                    outcome = "not made"
                 else:
                     result = TOOL_IMPL[name](**args) if name in TOOL_IMPL else {"error": f"unknown tool {name}"}
+                    outcome = "error" if "error" in result else "ok"
             except TypeError as e:
                 result = {"error": f"bad arguments: {e}"}
             except Exception as e:
                 result = {"error": str(e).strip().splitlines()[0][:300]}
+            if "permission denied" in str(result.get("error", "")):
+                outcome = "refused"                        # by the proxy: role or table grant
             note = result.get("error") or (f"{result['row_count']} rows" if "row_count" in result else
                                            f"{len(result['passages'])} passages" if "passages" in result else "done")
             print(f"{DIM}    {note} ({time.time() - t0:.1f} s){OFF}", flush=True)
+            AUDIT.record("tool", name, outcome, (time.time() - t0) * 1000, {"arguments": args, "result": (
+                result if name in WRITE_TOOLS or "error" in result else note)})
             messages.append({"role": "tool", "tool_name": name, "content": json.dumps(result, ensure_ascii=False)})
+    AUDIT.record("answer", outcome="no answer", detail={"answer": "", "reason": "step limit"})
     return "I could not finish within the allowed number of steps."
 
 
@@ -468,6 +547,10 @@ def seed() -> None:
             return True
         except psycopg2.Error:
             return False
+
+    if not exists("agent_audit"):      # made once and never emptied here: the trail outlives a reload
+        run(AUDIT_DDL, fetch=False)
+        time.sleep(3)
 
     if all(exists(t) for t in tables) and os.environ.get("RESEED") != "drop":
         # a reload: empty the tables and keep them. (Dropping a table and creating it again
@@ -564,6 +647,42 @@ def check() -> None:
         return (f"reads as {ROLES['reader']['user']} ({n} claims visible, UPDATE refused: {refused}); "
                 f"writes as {ROLES['writer']['user']} (DDL refused)")
     line("least privilege", roles)
+
+    def grants():
+        """From 0.4.1 the proxy holds each user to its tables; an older proxy applies the role only."""
+        def denied(sql, role):
+            try:
+                run(sql, fetch=False, role=role)
+            except psycopg2.Error as e:
+                return "permission denied" in str(e)
+            return False
+        probes = [("the reader reading the audit trail", "SELECT count(*) FROM agent_audit;", "reader"),
+                  ("the writer deleting a claim", "DELETE FROM claims WHERE id = 'no-such-claim';", "writer"),
+                  ("the writer changing a customer", "UPDATE customers SET city = city WHERE id = 'no-such-customer';", "writer"),
+                  ("the audit user reading the trail", "SELECT count(*) FROM agent_audit;", "audit"),
+                  ("the audit user changing the trail", "UPDATE agent_audit SET outcome = outcome WHERE session = 'no-such-session';", "audit")]
+        got = [(what, denied(sql, role)) for what, sql, role in probes]     # none of them changes a row if allowed
+        if all(d for _, d in got):
+            return f"enforced by the proxy: all {len(got)} probes outside the grants were refused"
+        if not any(d for _, d in got):
+            return ("NOT enforced: this proxy version applies the role only (reader / writer on every table); "
+                    "per-table grants need SecretSkyDB 0.4.1")
+        raise RuntimeError("partly enforced; allowed: " + "; ".join(w for w, d in got if not d))
+    line("table grants", grants)
+
+    def trail():
+        if ROLES["audit"] is SSDB:
+            raise RuntimeError("no audit user in agent.env: run vm-setup.sh again")
+        before = run("SELECT count(*) FROM agent_audit;")[1][0][0]
+        if not AUDIT.record("check", detail={"check": "agent.py check"}):
+            raise RuntimeError("the audit record could not be written")
+        for _ in range(10):
+            n = run("SELECT count(*) FROM agent_audit;")[1][0][0]
+            if n > before:
+                return f"{n} records in agent_audit, written as {ROLES['audit']['user']}"
+            time.sleep(1)
+        raise RuntimeError("the audit record was accepted but is not in the table")
+    line("audit trail", trail)
     line("model server", lambda: ", ".join(m["name"] for m in requests.get(f"{OLLAMA}/api/tags", timeout=10).json()["models"]))
 
     def where():
@@ -646,7 +765,19 @@ def run_cases() -> None:
         print("    " + " ".join(text.split())[:400])
         print(f"  {'PASS' if ok else 'FAIL'} ({time.time() - t0:.0f} s)" + ("" if ok else ": " + "; ".join(problems)))
     print(f"\n{passed} of {len(CASES)} passed with {MODEL} in {time.time() - t_all:.0f} s")
-    raise SystemExit(0 if passed == len(CASES) else 1)
+    # the trail of this run: one question and one answer record per case, and a record for every change
+    time.sleep(3)
+    _, rows = run("SELECT event, tool, outcome FROM agent_audit WHERE session = %s;", (AUDIT.session,))
+    count = lambda ev, pred=lambda r: True: sum(1 for r in rows if r[0] == ev and pred(r))
+    made = count("tool", lambda r: r[1] in WRITE_TOOLS and r[2] == "ok")
+    attempts = count("tool", lambda r: r[1] in WRITE_TOOLS and r[2] == "attempt")
+    trail_ok = (AUDIT.failed == 0 and count("question") == len(CASES) and count("answer") == len(CASES)
+                and made <= attempts)
+    print(f"audit trail {'ok' if trail_ok else 'FAIL'}: {len(rows)} records for session {AUDIT.session} — "
+          f"{count('question')} questions, {count('tool')} tool records ({made} changes made, "
+          f"{count('tool', lambda r: r[2] in ('read-only', 'declined', 'refused'))} refused), "
+          f"{count('check')} checks, {count('answer')} answers, {AUDIT.failed} not stored")
+    raise SystemExit(0 if passed == len(CASES) and trail_ok else 1)
 
 
 # ───────────────────────────── entry ─────────────────────────────
@@ -680,6 +811,8 @@ def main() -> None:
             print("\n" + answer(messages, "confirm"))
     elif cmd == "test":
         run_cases()
+    elif cmd == "audit":
+        show_audit(int(sys.argv[2]) if len(sys.argv) > 2 else 30)
     else:
         print(__doc__)
         raise SystemExit(1)

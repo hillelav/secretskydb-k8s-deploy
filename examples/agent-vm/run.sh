@@ -12,6 +12,7 @@
 #   ./run.sh chat          talk to the agent; it asks before it changes any data
 #   ./run.sh ask "..."     one question, one answer, read-only (ask --write "..." allows changes)
 #   ./run.sh test          the built-in question set with pass / fail (reloads the sample data)
+#   ./run.sh audit [n]     the last n records of the agent's audit trail (default 30)
 #   ./run.sh status        VM, SecretSkyDB licence, model and data checks
 #   ./run.sh ssh           a shell on the VM
 #   ./run.sh stop | start  pause the VM (only its disk is charged) and resume it
@@ -126,7 +127,7 @@ cmd_up(){
       echo "  no capacity for $MACHINE in $z"
       made=0
     done
-    [ "$made" = 1 ] || die "no zone of $region has capacity for $MACHINE right now. Try another region, for example: ZONE=us-west1-a ./run.sh up"
+    [ "$made" = 1 ] || die "no zone of $region has capacity for $MACHINE right now. Try another region (ZONE=us-east1-b, us-west4-a, europe-west4-a or us-central1-a), or run without GPU=1: slower, but always available."
     echo "$ZONE" > "$ZONE_FILE"
   elif [ "$st" != "RUNNING" ]; then
     step "starting VM $VM"
@@ -189,6 +190,12 @@ cmd_ask(){
 
 cmd_test(){ need_running; vm_ssh --command "$(agent) test"; }
 
+cmd_audit(){
+  need_running
+  case "${1:-30}" in ''|*[!0-9]*) die "usage: ./run.sh audit [number of records]";; esac
+  vm_ssh --command "$(agent) audit ${1:-30}"
+}
+
 cmd_stop(){
   preflight
   [ "$(vm_status)" = "RUNNING" ] || { echo "VM $VM is not running."; exit 0; }
@@ -247,10 +254,11 @@ case "${1:-}" in
   chat)   cmd_chat ;;
   ask)    shift; cmd_ask "$@" ;;
   test)   cmd_test ;;
+  audit)  shift; cmd_audit "$@" ;;
   stop)   cmd_stop ;;
   start)  cmd_start ;;
   status) cmd_status ;;
   ssh)    cmd_ssh ;;
   down)   cmd_down ;;
-  *)      sed -n '8,19p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *)      sed -n '8,20p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

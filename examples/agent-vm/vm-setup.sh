@@ -7,8 +7,8 @@
 # what is already in place.
 #
 #   1. single-node Kubernetes (k3s) and Helm
-#   2. SecretSkyDB from the chart, with the reporting key of the Marketplace order, and two
-#      proxy users for the agent: a reader (SELECT only) and a writer (no DDL)
+#   2. SecretSkyDB from the chart, with the reporting key of the Marketplace order, and three
+#      proxy users for the agent: a reader (SELECT only), a writer (no DDL) and one for the audit trail
 #   3. Ollama with the chat model and the embedding model
 #   4. the agent's Python environment and its connection settings
 #   5. sample data loaded through SecretSkyDB, then an end-to-end check
@@ -56,7 +56,8 @@ USERS_SECRET="$RELEASE-agent-users"
 USERS_ENV="$ROOT/agent-users.env"
 USERS_CHANGED=""
 kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$NAMESPACE" >/dev/null
-if [ ! -s "$USERS_ENV" ] || ! kubectl -n "$NAMESPACE" get secret "$USERS_SECRET" >/dev/null 2>&1; then
+if [ ! -s "$USERS_ENV" ] || ! grep -q '^SSDB_AUDIT_USER=' "$USERS_ENV" \
+   || ! kubectl -n "$NAMESPACE" get secret "$USERS_SECRET" >/dev/null 2>&1; then
   ( umask 077; USERS_ENV="$USERS_ENV" python3 "$HERE/agent-users.py" > "$ROOT/users.json" )
   kubectl -n "$NAMESPACE" create secret generic "$USERS_SECRET" --from-file=users.json="$ROOT/users.json" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
@@ -122,7 +123,7 @@ OLLAMA_URL=http://127.0.0.1:11434
 MODEL=$MODEL
 EMBED_MODEL=$EMBED_MODEL
 EOF
-cat "$USERS_ENV" >> "$ROOT/agent.env"     # the reader and writer users of the agent's tools
+cat "$USERS_ENV" >> "$ROOT/agent.env"     # the reader, writer and audit users of the agent
 
 step "5/5 sample data and end-to-end check"
 "$ROOT/venv/bin/python" "$HERE/agent.py" seed
