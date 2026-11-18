@@ -1,4 +1,4 @@
-# Copied from the SecretSkyDB repository, sql/mcp/ssdb_mcp_server.py (commit c02d976), for the
+# Copied from the SecretSkyDB repository, sql/mcp/ssdb_mcp_server.py (commit 30dcb11), for the
 # DiamondClaw installer. Apache License 2.0 for this file. The copy in the proxy image is canonical.
 #!/usr/bin/env python3
 # sql/mcp/ssdb_mcp_server.py
@@ -476,20 +476,22 @@ def args_digest(kind: str, payload: Any) -> str:
 
 
 def make_confirm(ident: Identity, digest: str) -> str:
+    """<urlsafe-base64 of "agent|digest|expiry">.<hex HMAC>: the signature is hex so no byte of it can be
+    mistaken for a separator (a raw signature containing "|" made one token in 256 unreadable)."""
     exp = int(time.time()) + CONFIRM_TTL_S
     msg = f"{ident.id}|{digest}|{exp}".encode()
-    sig = hmac.new(_CONFIRM_KEY, msg, hashlib.sha256).digest()[:16]
-    return base64.urlsafe_b64encode(msg + b"|" + sig).decode().rstrip("=")
+    sig = hmac.new(_CONFIRM_KEY, msg, hashlib.sha256).hexdigest()[:32]
+    return base64.urlsafe_b64encode(msg).decode().rstrip("=") + "." + sig
 
 
 def check_confirm(ident: Identity, digest: str, token: str) -> None:
     try:
-        raw = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4))
-        msg, sig = raw.rsplit(b"|", 1)
+        body, sig = token.strip().split(".", 1)
+        msg = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))
         who, dig, exp = msg.decode().split("|")
     except Exception:
         raise ToolError("confirm_token is not valid", "repeat the first call without a token to get a new preview")
-    good = hmac.compare_digest(hmac.new(_CONFIRM_KEY, msg, hashlib.sha256).digest()[:16], sig)
+    good = hmac.compare_digest(hmac.new(_CONFIRM_KEY, msg, hashlib.sha256).hexdigest()[:32], sig)
     if not good or who != ident.id or dig != digest:
         raise ToolError("confirm_token does not match these arguments", "the token confirms exactly the call that produced it")
     if int(exp) < time.time():
