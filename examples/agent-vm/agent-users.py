@@ -39,10 +39,11 @@ def main() -> None:
     users, env = [], []
     for name, role, key, tables in (
             ("agent_reader", "reader", "READER", {"customers": "read", "claims": "read", "handbook_chunk": "read"}),
-            ("agent_writer", "writer", "WRITER", {"claims": ["select", "insert", "update"]}),
+            ("agent_writer", "writer", "WRITER", {"claims": ["select", "insert", "update"], "customers": "read", "handbook_chunk": "read"}),
             ("agent_audit", "writer", "AUDIT", {"agent_audit": ["insert"]})):
         pw = secrets.token_urlsafe(24)
-        users.append({"name": name, "role": role, "scram": verifier(pw), "tables": tables})
+        # catalog: the MCP server's describe reads pg_catalog / information_schema as the agent's user
+        users.append({"name": name, "role": role, "scram": verifier(pw), "tables": tables, "catalog": name != "agent_audit"})
         env += [f"SSDB_{key}_USER={name}", f"SSDB_{key}_PASSWORD={pw}"]
     with open(os.environ["USERS_ENV"], "w", encoding="utf-8") as f:
         f.write("\n".join(env) + "\n")
