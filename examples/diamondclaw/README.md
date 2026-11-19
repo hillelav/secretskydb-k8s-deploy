@@ -71,3 +71,25 @@ Any client, against the cluster's endpoint: URL `https://<host>:55440/mcp`, head
 `bench.py` runs the eleven questions of `examples/agent-vm` through a small agent loop that uses
 the MCP server's tools with a model served by Ollama, and reports pass/fail per question. It is how
 a model swap becomes a number: `python3 bench.py --model gpt-oss:20b --model qwen2.5:14b`.
+
+## A customer demo
+
+`demo.py` is a short, narrated run for a screen in front of a buyer: a local model answering real
+questions over SecretSkyDB through the MCP server, then the two things only SecretSkyDB does — a
+secret column read and summed without any single value being revealed, and a hostile query refused —
+with the audit trail of everything the agent did.
+
+```
+AGENT_ENV=~/ssdb-agent/agent.env python3 demo.py --mcp-url $MCP_URL --mcp-token $TOKEN
+```
+
+It uses `qwen2.5:14b` (the tested model) for three reliable reads — a plain lookup, a reconstructed
+secret phone number, and a SUM over a secret amount computed on the shares — then files a claim
+through the write tool (preview, then an operator-confirmed commit) and prints the refusal and the
+audit trail. Add `--pause` to step through it in a live talk, `--no-trace` to hide the tool calls.
+
+Note on scope: the model drives the reads; the single write is driven deterministically because a
+14B model does not reliably pick a free primary key or carry a confirm token across two calls. The
+path it exercises — preview, confirm, audit — is exactly the product's. A larger model, or a write
+tool that generates the id, closes that gap (`bench.py` measures it: this model passes the reads and
+the aggregate, not the model-driven writes or the handbook-grounded questions).

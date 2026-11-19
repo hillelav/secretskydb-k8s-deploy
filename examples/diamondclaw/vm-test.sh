@@ -68,7 +68,9 @@ sudo podman save "$IMG" -o proxy.tar && sudo k3s ctr images import proxy.tar | t
 TOK=$(openssl rand -hex 32); echo "SSDB_MCP_TOKEN=$TOK" > $R/mcp-token.env; chmod 600 $R/mcp-token.env
 kubectl -n secretskydb create secret generic ssdb-mcp-tokens --from-literal=tokens.json="{\"tokens\":[{\"id\":\"hermes-1\",\"token\":\"$TOK\",\"user\":\"$SSDB_WRITER_USER\",\"password\":\"$SSDB_WRITER_PASSWORD\"}]}" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 kubectl -n secretskydb create secret generic ssdb-mcp-audit --from-literal=user="$SSDB_AUDIT_USER" --from-literal=password="$SSDB_AUDIT_PASSWORD" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-helm -n secretskydb upgrade secretskydb ./chart/secretskydb --reuse-values \
+# --reset-then-reuse-values (helm 3.14+): the new chart's defaults (the mcp block) plus the release's own values;
+# --reuse-values would keep the OLD chart's defaults and render mcp.port empty
+helm -n secretskydb upgrade secretskydb ./chart/secretskydb --reset-then-reuse-values \
   --set proxy.image.repo=localhost/ssdb-proxy --set proxy.image.tag=0.5-dev --set imagePullPolicy=IfNotPresent \
   --set mcp.enabled=true --set mcp.tokensSecret=ssdb-mcp-tokens --set mcp.auditSecret=ssdb-mcp-audit \
   --set mcp.embed.url=http://$(hostname -I | awk '{print $1}'):11434 --set mcp.embed.model=all-minilm \
@@ -97,13 +99,13 @@ stage_bench(){
   step "bench: the eleven questions through the MCP server, models: $MODELS"
   vssh "cd $R && for m in $MODELS; do ollama pull \$m >/dev/null 2>&1 || true; done; \
     [ -x venv/bin/python ] || python3 -m venv venv; venv/bin/pip install -q 'mcp>=1.2,<2' 'psycopg[binary]' psycopg2-binary requests pyyaml; \
-    . $R/mcp-token.env && AGENT_ENV=$R/agent.env venv/bin/python examples/diamondclaw/bench.py --mcp-url \$MCP_URL --mcp-token \$SSDB_MCP_TOKEN \
-    $(for m in $MODELS; do printf -- '--model %s ' "$m"; done) --out $R/bench-mcp.json"
+    . ./mcp-token.env && AGENT_ENV=agent.env venv/bin/python examples/diamondclaw/bench.py --mcp-url \$MCP_URL --mcp-token \$SSDB_MCP_TOKEN \
+    $(for m in $MODELS; do printf -- '--model %s ' "$m"; done) --out bench-mcp.json"
 }
 
 stage_hermes(){
   step "hermes: the eleven questions through hermes chat -q"
-  vssh "cd $R && export PATH=\$HOME/.local/bin:\$PATH && AGENT_ENV=$R/agent.env venv/bin/python examples/diamondclaw/bench.py --hermes --out $R/bench-hermes.json"
+  vssh "cd $R && export PATH=\$HOME/.local/bin:\$PATH && AGENT_ENV=agent.env venv/bin/python examples/diamondclaw/bench.py --hermes --out bench-hermes.json"
 }
 
 case "${1:-all}" in
