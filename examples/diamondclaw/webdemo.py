@@ -128,6 +128,86 @@ async def write_claim() -> dict:
             "trace": trace, "calls": 2, "secs": round(time.time() - t0, 1)}
 
 
+def _stores():
+    f = os.environ.get("SSDB_DASH_FILE", "")
+    if f and Path(f).exists():
+        return json.loads(Path(f).read_text())
+    return json.loads(os.environ.get("SSDB_DASH_STORES", "[]"))
+
+
+def _cell(v):
+    if v is None:
+        return "—"
+    if isinstance(v, (bytes, bytearray, memoryview)):
+        b = bytes(v)
+        return "0x" + b[:8].hex() + ("…" if len(b) > 8 else "")
+    if isinstance(v, list):
+        head = ",".join(str(x) for x in v[:2])
+        return f"[{len(v)} ints] {head}…" if len(v) > 2 else str(v)
+    t = str(v)
+    return t if len(t) <= 30 else t[:27] + "…"
+
+
+def dashboard():
+    """The faces-demo view: one card per store (up + row counts), and the
+    same customer row read through the proxy and raw from every store —
+    plaintext via the proxy, shares elsewhere."""
+    import psycopg2
+    out = {"stores": [], "split": {"cols": [], "stores": []}}
+    tables = ("customers", "claims", "handbook_chunk")
+    # the reference row, through the proxy (reconstructed where authorized)
+    try:
+        with A.db("admin") as c, c.cursor() as cur:
+            cur.execute("SELECT id, name, city, plan, phone FROM customers "
+                        "WHERE name = 'Noa Friedman'")
+            r = cur.fetchone()
+        proxy_row = dict(zip(("id", "name", "city", "plan", "phone"), r)) if r else {}
+    except Exception as e:                           # noqa: BLE001
+        proxy_row = {"error": str(e)[:80]}
+    key = proxy_row.get("id")
+    out["split"]["stores"].append(
+        {"name": "Through the proxy", "row": {k: _cell(v) for k, v in proxy_row.items()}})
+    for st in _stores():
+        card = {"name": st["name"], "up": False, "counts": {}, "error": ""}
+        row = {}
+        try:
+            cn = psycopg2.connect(host=st["host"], port=st.get("port", 5432),
+                                  dbname=st.get("db", "ssdb"), user=st.get("user", "postgres"),
+                                  password=st.get("pw", ""), sslmode="prefer",
+                                  connect_timeout=4)
+            cn.autocommit = True
+            card["up"] = True
+            with cn.cursor() as cur:
+                for t in tables:
+                    try:
+                        cur.execute(f'SELECT count(*) FROM "{t}"')
+                        card["counts"][t] = cur.fetchone()[0]
+                    except Exception:
+                        cn.rollback()
+                        card["counts"][t] = "—"
+                if key is not None:
+                    try:
+                        cur.execute('SELECT * FROM "customers" WHERE id = %s LIMIT 1', (key,))
+                        r = cur.fetchone()
+                        if r is not None:
+                            cols = [d.name for d in cur.description]
+                            row = {k: _cell(v) for k, v in zip(cols, r)}
+                    except Exception as e:           # noqa: BLE001
+                        row = {"error": str(e)[:60]}
+            cn.close()
+        except Exception as e:                       # noqa: BLE001
+            card["error"] = str(e).strip().splitlines()[0][:90]
+        out["stores"].append(card)
+        out["split"]["stores"].append({"name": st["name"] + " (raw)", "row": row})
+    seen = []
+    for stt in out["split"]["stores"]:
+        for k in stt["row"]:
+            if k not in seen and k != "error":
+                seen.append(k)
+    out["split"]["cols"] = seen
+    return out
+
+
 def audit_rows(limit=12):
     with A.db("admin") as c, c.cursor() as cur:
         cur.execute("SELECT ts, COALESCE(tool, event), db_user, outcome FROM agent_audit "
@@ -199,7 +279,23 @@ footer{color:var(--mut);font-size:12.5px;text-align:center;padding-bottom:4px}
 .spin{color:var(--mut);font-style:italic}
 </style></head><body><div class="wrap">
 <header><h1><b>DiamondClaw</b> — an AI agent on SecretSkyDB</h1>
-<span class="sub" id="status">model: … · all on this machine · nothing leaves it</span></header>
+<span class="sub" id="status">model: … · all on this machine · nothing leaves it</span>
+<button class="chip" id="dashbtn" style="border-color:var(--acc);color:var(--acc)">📊 Dashboard</button></header>
+<div id="dash" style="display:none;position:fixed;inset:0;background:rgba(5,10,14,.92);z-index:9;overflow:auto">
+ <div style="max-width:1150px;margin:24px auto;padding:0 16px">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+   <h1 style="font-size:19px">📊 The cluster, store by store</h1>
+   <button class="chip" id="dashclose">✕ close</button></div>
+  <div id="cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:10px 0"></div>
+  <div class="card" style="margin-top:12px"><h2>One row, everywhere — Noa Friedman</h2>
+   <div style="overflow-x:auto"><table id="splitt"></table></div>
+   <div class="sub" style="padding:8px 12px">Through the proxy the phone is served only to an
+   authorized user. The cache is the protected store inside the pod (with scrub-after-flush it holds
+   no secret plaintext at all); each share store holds a meaningless fragment — any two of the three
+   reconstruct the value, one alone reveals nothing.</div>
+  </div>
+ </div>
+</div>
 <div class="grid">
   <div class="card"><h2>Ask the agent</h2>
     <div id="chat"></div>
@@ -258,6 +354,20 @@ $('fish').onclick=async()=>{const d=await(await fetch('/fish',{method:'POST'})).
 $('fishout').innerHTML='$ '+esc(d.sql)+'\\n'+(d.refused?'<span class="no">'+esc(d.error)
 +'</span>\\nThe agent could READ that phone when authorized — but nobody can FILTER by it.'
 :'<span class="no">NOT refused: '+esc(d.rows)+'</span>');};
+$('dashbtn').onclick=async()=>{$('dash').style.display='block';
+$('cards').innerHTML='<span class="sub">reading every store…</span>';
+try{const d=await(await fetch('/dashboard')).json();
+$('cards').innerHTML=d.stores.map(s=>'<div class="card" style="padding:10px 12px">'
++'<div><span style="color:'+(s.up?'var(--good)':'var(--bad)')+'">●</span> <b>'+esc(s.name)+'</b></div>'
++(s.up?Object.entries(s.counts).map(([t,n])=>'<div class="sub">'+esc(t)+': '+esc(n)+' rows</div>').join('')
+:'<div class="sub">'+esc(s.error)+'</div>')+'</div>').join('');
+const cols=d.split.cols, sts=d.split.stores;
+$('splitt').innerHTML='<tr><th>column</th>'+sts.map(s=>'<th>'+esc(s.name)+'</th>').join('')+'</tr>'
++cols.map(c=>'<tr><td>'+esc(c)+'</td>'+sts.map(s=>{const v=s.row[c]??'—';
+const hot=(c==='phone');const good=hot&&String(v).startsWith('05');
+return '<td class="'+(hot?(good?'ok':'refused'):'')+'">'+esc(v)+'</td>';}).join('')+'</tr>').join('');
+}catch(e){$('cards').innerHTML='<span class="sub">dashboard error: '+esc(e)+'</span>';}};
+$('dashclose').onclick=()=>{$('dash').style.display='none';};
 fetch('/info').then(r=>r.json()).then(d=>{$('status').textContent=
 'model: '+d.model+' (local) · MCP: '+d.mcp+' · all on this machine';});
 refreshAudit();
@@ -287,6 +397,11 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:                     # noqa: BLE001
                 self._send([{"ts": "", "what": "audit unreadable", "who": "",
                              "outcome": str(e)[:80]}])
+        elif self.path == "/dashboard":
+            try:
+                self._send(dashboard())
+            except Exception as e:                   # noqa: BLE001
+                self._send({"error": str(e)[:200]}, code=500)
         elif self.path == "/info":
             self._send({"model": STATE.model,
                         "mcp": STATE.bargs.mcp_url or "local stdio"})
