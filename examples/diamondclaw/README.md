@@ -93,3 +93,19 @@ Note on scope: the model drives the reads; the single write is driven determinis
 path it exercises — preview, confirm, audit — is exactly the product's. A larger model, or a write
 tool that generates the id, closes that gap (`bench.py` measures it: this model passes the reads and
 the aggregate, not the model-driven writes or the handbook-grounded questions).
+
+## The demo in a browser
+
+`webdemo.py` serves the same demo as a web page: a chat with the agent, the live
+tool-call trace, the audit trail, a one-click "try to fish with the secret"
+refusal, and a scripted claim-filing button (write preview → operator confirm).
+It binds 127.0.0.1 only; reach a VM through an SSH tunnel:
+
+```
+# on the VM
+. ~/ssdb-agent/mcp-token.env
+AGENT_ENV=~/ssdb-agent/agent.env python3 webdemo.py --mcp-url "$MCP_URL" --mcp-token "$SSDB_MCP_TOKEN"
+# on the laptop
+gcloud compute ssh ssdb-agent --zone <zone> -- -N -L 8077:localhost:8077
+open http://localhost:8077
+```
